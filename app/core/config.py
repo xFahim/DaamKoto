@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     facebook_verify_token: str
+    facebook_page_access_token: str
 
     model_config = SettingsConfigDict(
         env_file=".env",

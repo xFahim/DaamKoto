@@ -62,8 +62,8 @@ async def receive_webhook(payload: FacebookWebhookPayload) -> dict[str, str]:
     Returns:
         A success response
     """
-    # Process the webhook event (logs to console)
-    facebook_service.process_webhook_event(payload)
+    # Process the webhook event (logs to console and sends replies)
+    await facebook_service.process_webhook_event(payload)
 
     # Return 200 immediately
     return {"status": "ok"}
