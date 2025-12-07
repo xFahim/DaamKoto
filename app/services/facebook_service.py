@@ -1,9 +1,20 @@
 """Service layer for Facebook Messenger webhook processing."""
 
 import httpx
+import google.generativeai as genai
 from typing import Any
 from app.core.config import settings
 from app.schemas.facebook import FacebookWebhookPayload
+
+# Configure Gemini AI
+genai.configure(api_key=settings.gemini_api_key)
+
+# Initialize the model with system instruction
+system_instruction = "think of yourself as someone who only talks about Adib. Adib is a BRACU Student, he loves fassion, gym. and got extreme high temper. give funny response. he sucks at valorant. but thinks he is good at it. also he makes insta reels."
+model = genai.GenerativeModel(
+    "gemini-2.5-flash",
+    system_instruction=system_instruction,
+)
 
 
 class FacebookService:
@@ -96,15 +107,24 @@ class FacebookService:
                     if messaging.message.attachments:
                         print(f"  Attachments: {len(messaging.message.attachments)}")
 
-                    # Send automatic reply for text messages
+                    # Send AI-generated reply for text messages
                     if messaging.message.text:
-                        reply_text = (
-                            f"I received your message: {messaging.message.text}"
-                        )
-                        await FacebookService.send_message(
-                            recipient_id=messaging.sender.id,
-                            message_text=reply_text,
-                        )
+                        user_text = messaging.message.text
+                        try:
+                            # Generate AI response
+                            response = model.generate_content(user_text)
+                            ai_response = response.text.strip()
+                            await FacebookService.send_message(
+                                recipient_id=messaging.sender.id,
+                                message_text=ai_response,
+                            )
+                        except Exception as e:
+                            print(f"Error generating AI response: {str(e)}")
+                            # Fallback to a simple error message
+                            await FacebookService.send_message(
+                                recipient_id=messaging.sender.id,
+                                message_text="Sorry, I'm having trouble processing your message right now. Please try again later!",
+                            )
 
                 if messaging.postback:
                     print(f"  Postback: {messaging.postback}")

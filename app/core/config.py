@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     facebook_verify_token: str
     facebook_page_access_token: str
+    gemini_api_key: str
 
     model_config = SettingsConfigDict(
         env_file=".env",
