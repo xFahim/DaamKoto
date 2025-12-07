@@ -1,6 +1,7 @@
 """Facebook Messenger webhook endpoints."""
 
 from fastapi import APIRouter, Query, Request, HTTPException, status
+from fastapi.responses import PlainTextResponse
 from app.core.config import settings
 from app.services.facebook_service import facebook_service
 from app.schemas.facebook import FacebookWebhookPayload
@@ -13,12 +14,12 @@ async def verify_webhook(
     mode: str = Query(..., alias="hub.mode"),
     token: str = Query(..., alias="hub.verify_token"),
     challenge: str = Query(..., alias="hub.challenge"),
-) -> str:
+) -> PlainTextResponse:
     """
     Facebook webhook verification endpoint.
 
     This endpoint is called by Facebook to verify the webhook subscription.
-    It validates the verify token and returns the challenge string.
+    It validates the verify token and returns the challenge string as plain text.
 
     Args:
         mode: The mode parameter from Facebook (should be 'subscribe')
@@ -26,7 +27,7 @@ async def verify_webhook(
         challenge: The challenge string from Facebook
 
     Returns:
-        The challenge string if verification succeeds
+        PlainTextResponse containing the challenge string if verification succeeds
 
     Raises:
         HTTPException: If verification fails
@@ -44,7 +45,7 @@ async def verify_webhook(
             detail="Verification failed",
         )
 
-    return result
+    return PlainTextResponse(content=result)
 
 
 @router.post("/webhook")
