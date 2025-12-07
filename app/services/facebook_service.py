@@ -123,7 +123,7 @@ class FacebookService:
                             # Fallback to a simple error message
                             await FacebookService.send_message(
                                 recipient_id=messaging.sender.id,
-                                message_text="Sorry, I'm having trouble processing your message right now. Please try again later!",
+                                message_text="Sorry, I'm having trouble processing your message right now! Please try again later!",
                             )
 
                 if messaging.postback:
