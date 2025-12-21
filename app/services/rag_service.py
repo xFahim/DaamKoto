@@ -55,25 +55,30 @@ class RagService:
                     name = metadata.get("name", "Unknown")
                     price = metadata.get("price", "N/A")
                     stock = metadata.get("stock", "N/A")
+                    description = metadata.get("description", "")
+                    
                     context_parts.append(
-                        f"Name: {name}, Price: {price}, Stock: {stock}"
+                        f"Name: {name}, Price: {price}, Stock: {stock}, Description/URL: {description}"
                     )
 
             # Step 4: Construct the prompt
             if context_parts:
                 context = "\n".join(context_parts)
                 system_prompt = (
-                    "You are a sales assistant. Use this context to answer the user's question: "
-                    f"\n\n{context}\n\n"
-                    "Provide helpful, accurate information based on the context provided. "
-                    "If the context doesn't contain relevant information, politely say so."
+                    "You are a helpful and concise sales assistant for GoodyBro. "
+                    "Use the provided context to suggest products to the user. "
+                    "Your response should be friendly and human-like, not robotic. "
+                    "Example: 'So, you're looking for this? We have this [Product Name] in stock.' "
+                    "CRITICAL: You MUST include the full product URL for each item you verify matches the user's request. "
+                    "Extract the URL from the 'Description/URL' field. "
+                    f"\n\nContext Products:\n{context}\n\n"
+                    "If the detailed context doesn't contain a relevant match, politely say so."
                 )
             else:
                 # Fallback: No relevant products found
                 system_prompt = (
-                    "You are a sales assistant. Based on the available context, "
-                    "you don't have information about the user's query. "
-                    "Politely inform the user that you don't have that information available."
+                    "You are a sales assistant. "
+                    "Politely inform the user that you couldn't find any products matching their description right now."
                 )
 
             # Step 5: Generate response using Gemini

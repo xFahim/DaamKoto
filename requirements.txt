@@ -7,3 +7,4 @@ google-generativeai
 python-multipart
 pinecone
 requests
+httpx

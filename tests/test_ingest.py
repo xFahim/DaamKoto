@@ -1,9 +1,15 @@
 """Test script for RAG ingestion pipeline."""
 
 import os
+import sys
+from pathlib import Path
 import requests
 from pinecone import Pinecone
 from dotenv import load_dotenv
+
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 # Load environment variables
 load_dotenv()
@@ -11,7 +17,7 @@ load_dotenv()
 # Configuration
 API_URL = "http://127.0.0.1:8000/api/v1/ingest"
 PAGE_ID = "goodybro"
-JSON_FILE = "goodybro.json"
+JSON_FILE = project_root / "goodybro.json"  # Path relative to project root
 INDEX_NAME = "chatpulse"
 
 
@@ -20,9 +26,14 @@ def upload_data():
     print(f"Uploading data from {JSON_FILE}...")
     
     try:
+        # Check if file exists
+        if not JSON_FILE.exists():
+            print(f"Error: {JSON_FILE} not found in the project root directory.")
+            return
+        
         # Open and read the JSON file
         with open(JSON_FILE, "rb") as f:
-            files = {"file": (JSON_FILE, f, "application/json")}
+            files = {"file": (JSON_FILE.name, f, "application/json")}
             data = {"page_id": PAGE_ID}
             
             # Send POST request
@@ -37,8 +48,6 @@ def upload_data():
             else:
                 print("\n✗ Upload failed!")
                 
-    except FileNotFoundError:
-        print(f"Error: {JSON_FILE} not found in the current directory.")
     except requests.exceptions.ConnectionError:
         print("Error: Could not connect to the API. Make sure the server is running on http://127.0.0.1:8000")
     except Exception as e:
@@ -90,6 +99,4 @@ if __name__ == "__main__":
         delete_namespace()
     else:
         print("Invalid choice. Please run the script again and enter '1' or '2'.")
-
-
 

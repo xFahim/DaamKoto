@@ -1,9 +1,8 @@
 """Service layer for Facebook Messenger webhook processing."""
 
-import httpx
 from app.core.config import settings
 from app.schemas.facebook import FacebookWebhookPayload
-from app.services.rag_service import rag_service
+from app.services.handlers.message_router import message_router
 
 
 class FacebookService:
@@ -30,44 +29,11 @@ class FacebookService:
         return None
 
     @staticmethod
-    async def send_message(recipient_id: str, message_text: str) -> bool:
-        """
-        Send a message to a Facebook Messenger user.
-
-        Args:
-            recipient_id: The Facebook user ID to send the message to
-            message_text: The text content of the message
-
-        Returns:
-            True if the message was sent successfully, False otherwise
-        """
-        url = "https://graph.facebook.com/v18.0/me/messages"
-        params = {"access_token": settings.facebook_page_access_token}
-        payload = {
-            "recipient": {"id": recipient_id},
-            "message": {"text": message_text},
-        }
-
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, params=params, json=payload)
-                if response.status_code == 200:
-                    print(f"Message sent successfully to {recipient_id}")
-                    return True
-                else:
-                    print(
-                        f"Failed to send message. Status: {response.status_code}, "
-                        f"Response: {response.text}"
-                    )
-                    return False
-        except Exception as e:
-            print(f"Error sending message: {str(e)}")
-            return False
-
-    @staticmethod
     async def process_webhook_event(payload: FacebookWebhookPayload) -> None:
         """
         Process incoming Facebook webhook events.
+
+        Routes messages to appropriate handlers based on message type (text/image).
 
         Args:
             payload: The validated Facebook webhook payload
@@ -94,33 +60,22 @@ class FacebookService:
                 print(f"  Recipient ID: {messaging.recipient.id}")
                 print(f"  Timestamp: {messaging.timestamp}")
 
+                # Process message events
                 if messaging.message:
-                    print(f"  Message ID: {messaging.message.mid}")
-                    print(f"  Message Text: {messaging.message.text}")
-                    if messaging.message.attachments:
-                        print(f"  Attachments: {len(messaging.message.attachments)}")
+                    message_dict = messaging.message.model_dump()
+                    print(f"  Message ID: {message_dict.get('mid')}")
+                    print(f"  Message Text: {message_dict.get('text')}")
+                    if message_dict.get("attachments"):
+                        print(f"  Attachments: {len(message_dict['attachments'])}")
 
-                    # Send AI-generated reply for text messages
-                    if messaging.message.text:
-                        user_message = messaging.message.text
-                        try:
-                            # Generate AI response using RAG service
-                            response_text = await rag_service.generate_response(
-                                user_query=user_message,
-                                page_id=page_id,
-                            )
-                            await FacebookService.send_message(
-                                recipient_id=sender_id,
-                                message_text=response_text,
-                            )
-                        except Exception as e:
-                            print(f"Error generating AI response: {str(e)}")
-                            # Fallback to a simple error message
-                            await FacebookService.send_message(
-                                recipient_id=sender_id,
-                                message_text="Sorry, I'm having trouble processing your message right now! Please try again later!",
-                            )
+                    # Route message to appropriate handler (text or image)
+                    await message_router.route_message(
+                        sender_id=sender_id,
+                        message=message_dict,
+                        page_id=page_id,
+                    )
 
+                # Log other event types
                 if messaging.postback:
                     print(f"  Postback: {messaging.postback}")
 
