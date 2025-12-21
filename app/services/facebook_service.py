@@ -1,20 +1,9 @@
 """Service layer for Facebook Messenger webhook processing."""
 
 import httpx
-import google.generativeai as genai
-from typing import Any
 from app.core.config import settings
 from app.schemas.facebook import FacebookWebhookPayload
-
-# Configure Gemini AI
-genai.configure(api_key=settings.gemini_api_key)
-
-# Initialize the model with system instruction
-system_instruction = "think of yourself as someone who only talks about Adib. Adib is a BRACU Student, he loves fassion, gym. and got extreme high temper. give funny response. he sucks at valorant. but thinks he is good at it. also he makes insta reels."
-model = genai.GenerativeModel(
-    "gemini-2.5-flash",
-    system_instruction=system_instruction,
-)
+from app.services.rag_service import rag_service
 
 
 class FacebookService:
@@ -91,13 +80,17 @@ class FacebookService:
         print()
 
         for entry in payload.entry:
+            # Extract page_id from entry
+            page_id = entry.id
+
             print(f"Entry ID: {entry.id}")
             print(f"Entry Time: {entry.time}")
             print(f"Number of messaging events: {len(entry.messaging)}")
             print()
 
             for messaging in entry.messaging:
-                print(f"  Sender ID: {messaging.sender.id}")
+                sender_id = messaging.sender.id
+                print(f"  Sender ID: {sender_id}")
                 print(f"  Recipient ID: {messaging.recipient.id}")
                 print(f"  Timestamp: {messaging.timestamp}")
 
@@ -109,20 +102,22 @@ class FacebookService:
 
                     # Send AI-generated reply for text messages
                     if messaging.message.text:
-                        user_text = messaging.message.text
+                        user_message = messaging.message.text
                         try:
-                            # Generate AI response
-                            response = model.generate_content(user_text)
-                            ai_response = response.text.strip()
+                            # Generate AI response using RAG service
+                            response_text = await rag_service.generate_response(
+                                user_query=user_message,
+                                page_id=page_id,
+                            )
                             await FacebookService.send_message(
-                                recipient_id=messaging.sender.id,
-                                message_text=ai_response,
+                                recipient_id=sender_id,
+                                message_text=response_text,
                             )
                         except Exception as e:
                             print(f"Error generating AI response: {str(e)}")
                             # Fallback to a simple error message
                             await FacebookService.send_message(
-                                recipient_id=messaging.sender.id,
+                                recipient_id=sender_id,
                                 message_text="Sorry, I'm having trouble processing your message right now! Please try again later!",
                             )
 
