@@ -1,12 +1,24 @@
 """FastAPI application entry point."""
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.api.router import api_router
+from app.services.rag_service import rag_service
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Initialize services
+    print("🚀 Starting up and initializing services...")
+    await rag_service.initialize()
+    yield
+    # Shutdown: Clean up resources if needed
+    print("🛑 Shutting down...")
 
 app = FastAPI(
     title="DaamKoto",
     description="A robust, scalable FastAPI project for integrating Facebook Messenger Webhooks",
     version="1.0.0",
+    lifespan=lifespan
 )
 
 # Include the primary API router

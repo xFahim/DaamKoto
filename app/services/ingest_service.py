@@ -1,94 +1,122 @@
 """Service layer for RAG ingestion processing."""
 
 import uuid
-import google.generativeai as genai
+import vertexai
+from vertexai.vision_models import MultiModalEmbeddingModel
 from pinecone import Pinecone
 from typing import Any
+import os
+import json
+from google.oauth2 import service_account
 from app.core.config import settings
 
-# Configure Gemini AI
-genai.configure(api_key=settings.gemini_api_key)
+# Initialize Vertex AI
+try:
+    service_account_json = settings.gcp_service_account_json
+    if service_account_json:
+        info = json.loads(service_account_json)
+        credentials = service_account.Credentials.from_service_account_info(info)
+        vertexai.init(
+            project=info["project_id"],
+            location="asia-east1",
+            credentials=credentials
+        )
+except Exception as e:
+    print(f"❌ Vertex AI Auth failed in IngestService: {e}")
 
 # Initialize Pinecone
 pc = Pinecone(api_key=settings.pinecone_api_key)
 
-# Connect to the specific index
-index = pc.Index("chatpulse")
+# Connect to the multimodal index
+index = pc.Index("chatpulse-multimodal")
 
 
 class IngestService:
     """Service for handling RAG ingestion and vector storage."""
 
-    @staticmethod
-    def process_and_upload(page_id: str, products: list) -> dict[str, Any]:
+    def __init__(self):
+        try:
+            self.model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
+        except Exception as e:
+            print(f"⚠️ Failed to load MultiModalEmbeddingModel in IngestService: {e}")
+            self.model = None
+
+    async def process_and_upload(self, page_id: str, products: list) -> dict[str, Any]:
         """
         Process products and upload them to Pinecone as vectors.
         Handles GoodyBro JSON format with smart key mapping.
-
-        Args:
-            page_id: The page/store ID to associate with the products
-            products: List of product dictionaries (GoodyBro format or standard format)
-
-        Returns:
-            Dictionary with count and namespace information
         """
+        if not self.model:
+            raise RuntimeError("Embedding model is not initialized")
+
+        import asyncio  # Import inside method or at top level if checking imports
+
         namespace = f"store_{page_id}"
         vectors_to_upsert = []
 
         for product in products:
             # Smart Key Mapping with fallbacks
-            # Name: Try "Product Name", fallback to "name", fallback to "Unknown Product"
             name = (
                 product.get("Product Name")
                 or product.get("name")
                 or "Unknown Product"
             )
 
-            # Price: Try "price-item", fallback to "price", fallback to "Unknown Price"
             price = (
                 product.get("price-item")
                 or product.get("price")
                 or "Unknown Price"
             )
 
-            # Stock: Try "badge" (e.g., "-25% OFF"), fallback to "In Stock"
             stock = product.get("badge") or "In Stock"
-
-            # Description: Construct dynamically from URL and badge
+            
             product_url = product.get("product url", "")
-            badge = product.get("badge", "")
-            description = f"URL: {product_url} - Badge: {badge}"
+            image_url = product.get("motion-reduce src") or product.get("image_url") or ""
 
-            # ID: Generate UUID since JSON has no ID field
+            description = f"URL: {product_url} - Badge: {stock}"
+
+            # ID
             vector_id = str(uuid.uuid4())
 
-            # Construct rich embedding text
+            # Construct rich embedding text (max 2000 chars roughly)
             text_to_embed = f"{name} {price} {stock} {description}"
 
-            # Generate embedding using Gemini
-            embedding_result = genai.embed_content(
-                model="models/text-embedding-004",
-                content=text_to_embed,
-            )
-            embedding = embedding_result["embedding"]
+            # Generate embedding using Vertex AI Multimodal
+            try:
+                # Text-only embedding for now since this endpoint receives JSON, not images files directly
+                # If product has image_url, we COULD download and embed it, but for speed/simplicity of this endpoint
+                # we'll stick to text embedding unless requested otherwise.
+                # However, MultiModalEmbeddingModel produces 1408-dim vector for text too.
+                
+                # Run blocking call in thread
+                embeddings = await asyncio.to_thread(
+                    self.model.get_embeddings, contextual_text=text_to_embed
+                )
+                embedding_values = embeddings.text_embedding
+            except Exception as e:
+                print(f"❌ Error embedding product {name}: {e}")
+                continue
 
-            # Create vector record with standardized metadata keys
+            # Create vector record
             vector_record = {
                 "id": vector_id,
-                "values": embedding,
+                "values": embedding_values,
                 "metadata": {
                     "name": name,
                     "price": price,
                     "stock": stock,
                     "description": description,
                     "page_id": page_id,
+                    "url": image_url, # Adding image url to metadata
+                    "product_url": product_url
                 },
             }
 
             vectors_to_upsert.append(vector_record)
 
-        # Upsert vectors to the specific namespace
-        index.upsert(vectors=vectors_to_upsert, namespace=namespace)
+        # Upsert vectors
+        if vectors_to_upsert:
+            index.upsert(vectors=vectors_to_upsert, namespace=namespace)
 
         return {
             "success": True,
@@ -98,4 +126,3 @@ class IngestService:
 
 
 ingest_service = IngestService()
-

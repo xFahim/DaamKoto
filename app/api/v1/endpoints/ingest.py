@@ -48,7 +48,7 @@ async def ingest_products(
             )
 
         # Process and upload to Pinecone
-        result = ingest_service.process_and_upload(page_id=page_id, products=products)
+        result = await ingest_service.process_and_upload(page_id=page_id, products=products)
 
         return result
 
@@ -62,6 +62,8 @@ async def ingest_products(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error processing file: {str(e)}",
         )
+
+
 
 
 

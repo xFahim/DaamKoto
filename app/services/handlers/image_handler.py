@@ -38,9 +38,12 @@ class ImageHandler:
             print(f"Image analyzed: {image_description}")
 
             # Use RAG service to search inventory based on image description
+            # We pass image_url so RAG can use CLIP image embeddings for retrieval
+            # while keeping image_description for the context prompt.
             response_text = await rag_service.generate_response(
                 user_query=image_description,
                 page_id=page_id,
+                image_url=image_url,
             )
             await messaging_service.send_message(
                 recipient_id=sender_id,
@@ -82,4 +85,6 @@ class ImageHandler:
 
 
 image_handler = ImageHandler()
+
+
 

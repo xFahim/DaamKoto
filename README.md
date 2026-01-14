@@ -86,3 +86,7 @@ The architecture is designed to easily accommodate:
 - WhatsApp integration
 - Instagram integration
 - AI automation features
+
+## Testing
+
+ python -m tests.test_vision_url

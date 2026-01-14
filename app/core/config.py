@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     facebook_page_access_token: str
     gemini_api_key: str
     pinecone_api_key: str
+    gcp_service_account_json: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
