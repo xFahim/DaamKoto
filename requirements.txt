@@ -1,1 +1,11 @@
-﻿fastapiuvicorn[standard]python-multiparthttpxgoogle-cloud-aiplatformgoogle-generativeaipineconepython-dotenvpydanticpydantic-settingsrequests
+﻿fastapi
+uvicorn[standard]
+python-multipart
+httpx
+google-cloud-aiplatform
+google-generativeai
+pinecone
+python-dotenv
+pydantic
+pydantic-settings
+requests
