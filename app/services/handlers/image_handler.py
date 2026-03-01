@@ -1,7 +1,6 @@
 """Handler for processing image messages from Facebook Messenger."""
 
 from typing import Any
-from app.services.image_service import image_service
 from app.services.messaging_service import messaging_service
 from app.services.rag_service import rag_service
 
@@ -33,15 +32,9 @@ class ImageHandler:
                 )
                 return
 
-            # Analyze the image using image service
-            image_description = await image_service.describe_image(image_url)
-            print(f"Image analyzed: {image_description}")
-
-            # Use RAG service to search inventory based on image description
-            # We pass image_url so RAG can use CLIP image embeddings for retrieval
-            # while keeping image_description for the context prompt.
+            # Use RAG service to search inventory using image embeddings
             response_text = await rag_service.generate_response(
-                user_query=image_description,
+                user_query="Find this product",
                 page_id=page_id,
                 image_url=image_url,
             )

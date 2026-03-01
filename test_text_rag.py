@@ -9,7 +9,7 @@ from app.services.rag_service import rag_service
 
 async def test_text_rag():
     # Test query
-    query = "Do you have any red t-shirts?"
+    query = "blue tshirt"
     
     print(f"🧪 Testing RAG with Text Query: '{query}'")
     print("-" * 50)

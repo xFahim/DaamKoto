@@ -46,8 +46,9 @@ class FacebookService:
         print()
 
         for entry in payload.entry:
-            # Extract page_id from entry
-            page_id = entry.id
+            # TODO: Map Facebook page ID to internal store name for production
+            # For now, hardcode to "goodybro" for testing
+            page_id = "goodybro"  # entry.id
 
             print(f"Entry ID: {entry.id}")
             print(f"Entry Time: {entry.time}")
