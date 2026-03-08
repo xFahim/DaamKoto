@@ -1,14 +1,12 @@
 """Service layer for image analysis using Google Gemini."""
 
 import httpx
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from app.core.config import settings
 
-# Configure Gemini AI
-genai.configure(api_key=settings.gemini_api_key)
-
-# Initialize the model
-model = genai.GenerativeModel("gemini-2.5-flash")
+# Shared client instance
+client = genai.Client(api_key=settings.gemini_api_key)
 
 
 class ImageService:
@@ -26,16 +24,10 @@ class ImageService:
         """
         try:
             # Download the image
-            async with httpx.AsyncClient() as client:
-                response = await client.get(image_url)
+            async with httpx.AsyncClient() as http_client:
+                response = await http_client.get(image_url)
                 response.raise_for_status()
                 image_bytes = response.content
-
-            # Prepare image blob for Gemini
-            image_blob = {
-                "mime_type": "image/jpeg",
-                "data": image_bytes,
-            }
 
             # Create the prompt
             prompt = (
@@ -45,7 +37,13 @@ class ImageService:
             )
 
             # Generate description using Gemini
-            response = await model.generate_content_async([prompt, image_blob])
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                ],
+            )
             return response.text
 
         except Exception as e:

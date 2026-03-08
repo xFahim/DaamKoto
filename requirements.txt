@@ -1,9 +1,9 @@
-﻿fastapi
+fastapi
 uvicorn[standard]
 python-multipart
 httpx
 google-cloud-aiplatform
-google-generativeai
+google-genai
 pinecone
 python-dotenv
 pydantic

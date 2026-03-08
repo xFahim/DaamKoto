@@ -1,6 +1,8 @@
 """Handler for FAQ-related messages with dummy store data."""
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from app.core.config import settings
 from app.services.messaging_service import messaging_service
 
 
@@ -31,6 +33,9 @@ FAQ_DATA = {
     "store_location": "We are primarily an online store. No physical outlet at the moment.",
 }
 
+# Shared client instance
+client = genai.Client(api_key=settings.gemini_api_key)
+
 
 class FaqHandler:
     """Handles FAQ queries using dummy store data + Gemini for natural responses."""
@@ -52,17 +57,22 @@ class FaqHandler:
         )
 
         try:
-            model = genai.GenerativeModel("gemini-2.5-flash")
             prompt = (
                 f"Store FAQ Information:\n{faq_context}\n\n"
                 f"User Question: {message_text}\n\n"
-                "Answer the user's question using ONLY the FAQ information above. "
-                "Be concise, friendly, and helpful. If the FAQ doesn't cover their "
-                "question, say you'll find out and get back to them."
+                "Answer using ONLY the FAQ info above. Keep it short and natural — "
+                "like a real person replying on Messenger, not a help page. "
+                "If the FAQ doesn't cover it, just say you'll check and get back.\n\n"
+                "LANGUAGE RULE (strict):\n"
+                "- If the user writes in English, reply in English.\n"
+                "- If they write in Banglish (Bengali in English letters), reply in Banglish.\n"
+                "- If they write in Bangla (বাংলা), reply in Bangla.\n"
+                "Match their tone and language."
             )
-            response = await model.generate_content_async(
-                prompt,
-                generation_config={"max_output_tokens": 250},
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(max_output_tokens=200),
             )
             reply = response.text.strip()
         except Exception as e:

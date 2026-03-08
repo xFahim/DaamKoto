@@ -1,14 +1,15 @@
 """Intent classification service using Gemini Function Calling."""
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from app.core.config import settings
 
 
 # Tool declarations — Gemini picks which "function" to call based on user message
 INTENT_TOOLS = [
-    genai.protos.Tool(
+    types.Tool(
         function_declarations=[
-            genai.protos.FunctionDeclaration(
+            types.FunctionDeclaration(
                 name="search_products",
                 description=(
                     "Search the product catalog/inventory. Use this when the user is "
@@ -16,65 +17,65 @@ INTENT_TOOLS = [
                     "colors, sizes, or describing an item they want to buy. "
                     "Examples: 'red t-shirt', 'do you have sneakers?', 'show me hoodies under 2000'"
                 ),
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "query": genai.protos.Schema(
-                            type=genai.protos.Type.STRING,
+                        "query": types.Schema(
+                            type=types.Type.STRING,
                             description="The product search query extracted from the user message",
                         )
                     },
                     required=["query"],
                 ),
             ),
-            genai.protos.FunctionDeclaration(
+            types.FunctionDeclaration(
                 name="general_chat",
                 description=(
                     "Handle general conversation, greetings, chitchat, thank you messages, "
                     "goodbyes, or any message that is NOT about products, FAQs, or complaints. "
                     "Examples: 'hi', 'hello', 'thanks', 'how are you', 'ok', 'bye', 'good morning'"
                 ),
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "message": genai.protos.Schema(
-                            type=genai.protos.Type.STRING,
+                        "message": types.Schema(
+                            type=types.Type.STRING,
                             description="The user's message to respond to conversationally",
                         )
                     },
                     required=["message"],
                 ),
             ),
-            genai.protos.FunctionDeclaration(
+            types.FunctionDeclaration(
                 name="answer_faq",
                 description=(
                     "Answer frequently asked questions about the store — operating hours, "
                     "return policy, shipping info, payment methods, store location, contact info. "
                     "Examples: 'what are your hours?', 'do you accept bkash?', 'how long does delivery take?'"
                 ),
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "topic": genai.protos.Schema(
-                            type=genai.protos.Type.STRING,
+                        "topic": types.Schema(
+                            type=types.Type.STRING,
                             description="The FAQ topic the user is asking about",
                         )
                     },
                     required=["topic"],
                 ),
             ),
-            genai.protos.FunctionDeclaration(
+            types.FunctionDeclaration(
                 name="handle_order_complaint",
                 description=(
                     "Handle order-related queries, complaints, issues with delivery, "
                     "refund requests, or problems with a purchased product. "
                     "Examples: 'where is my order?', 'I want a refund', 'my package arrived damaged'"
                 ),
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
                     properties={
-                        "issue": genai.protos.Schema(
-                            type=genai.protos.Type.STRING,
+                        "issue": types.Schema(
+                            type=types.Type.STRING,
                             description="The order issue or complaint description",
                         )
                     },
@@ -90,20 +91,11 @@ class IntentService:
     """Classifies user messages into intents using Gemini function calling."""
 
     def __init__(self):
-        self.model = None
+        self.client = None
 
     def initialize(self):
-        """Configure Gemini and create the classification model."""
-        genai.configure(api_key=settings.gemini_api_key)
-        self.model = genai.GenerativeModel(
-            "gemini-2.5-flash",
-            tools=INTENT_TOOLS,
-            system_instruction=(
-                "You are an intent classifier for an e-commerce store's Messenger chatbot. "
-                "Your ONLY job is to classify the user's message by calling the correct function. "
-                "You MUST call exactly one function for every message. Never respond with text."
-            ),
-        )
+        """Configure Gemini client for classification."""
+        self.client = genai.Client(api_key=settings.gemini_api_key)
         print("✅ Intent classification service initialized.")
 
     async def classify(self, message: str) -> dict:
@@ -117,14 +109,26 @@ class IntentService:
             dict with 'intent' (str) and 'params' (dict)
             Example: {"intent": "search_products", "params": {"query": "red t-shirt"}}
         """
-        if not self.model:
+        if not self.client:
             print("⚠️ Intent service not initialized, defaulting to general_chat.")
             return {"intent": "general_chat", "params": {"message": message}}
 
         try:
-            response = await self.model.generate_content_async(
-                message,
-                tool_config={"function_calling_config": {"mode": "ANY"}},
+            response = await self.client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=message,
+                config=types.GenerateContentConfig(
+                    system_instruction=(
+                        "You are an intent classifier for an e-commerce store's Messenger chatbot. "
+                        "Your ONLY job is to classify the user's message by calling the correct function. "
+                        "You MUST call exactly one function for every message. Never respond with text."
+                    ),
+                    tools=INTENT_TOOLS,
+                    tool_config=types.ToolConfig(
+                        function_calling_config=types.FunctionCallingConfig(mode="ANY")
+                    ),
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                ),
             )
 
             # Extract the function call from the response

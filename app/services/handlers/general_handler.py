@@ -1,7 +1,12 @@
 """Handler for general conversation / chitchat messages."""
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
+from app.core.config import settings
 from app.services.messaging_service import messaging_service
+
+# Shared client instance
+client = genai.Client(api_key=settings.gemini_api_key)
 
 
 class GeneralHandler:
@@ -18,18 +23,22 @@ class GeneralHandler:
             page_id: The Facebook page ID
         """
         try:
-            model = genai.GenerativeModel(
-                "gemini-2.5-flash",
-                system_instruction=(
-                    "You are a friendly sales assistant for an online store. "
-                    "Keep responses short, warm, and natural (1-2 sentences max). "
-                    "If the user greets you, greet back and ask how you can help. "
-                    "If they thank you, respond graciously. Stay in character as a store assistant."
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"User: {message_text}",
+                config=types.GenerateContentConfig(
+                    system_instruction=(
+                        "You are a chill, friendly sales assistant for an online store. "
+                        "Keep it short — 1-2 lines max. Sound like a real person texting, not a bot. "
+                        "No emojis overload, just be natural.\n\n"
+                        "LANGUAGE RULE (strict):\n"
+                        "- If the user writes in English, reply in English.\n"
+                        "- If they write in Banglish (Bengali in English letters like 'kemon acho'), reply in Banglish.\n"
+                        "- If they write in Bangla (বাংলা), reply in Bangla.\n"
+                        "Match their vibe and language exactly."
+                    ),
+                    max_output_tokens=150,
                 ),
-            )
-            response = await model.generate_content_async(
-                f"User: {message_text}",
-                generation_config={"max_output_tokens": 200},
             )
             reply = response.text.strip()
         except Exception as e:
