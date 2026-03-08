@@ -19,7 +19,7 @@ class GeneralHandler:
         """
         try:
             model = genai.GenerativeModel(
-                "gemini-3-flash-preview",
+                "gemini-2.5-flash",
                 system_instruction=(
                     "You are a friendly sales assistant for an online store. "
                     "Keep responses short, warm, and natural (1-2 sentences max). "
