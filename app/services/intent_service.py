@@ -96,7 +96,7 @@ class IntentService:
         """Configure Gemini and create the classification model."""
         genai.configure(api_key=settings.gemini_api_key)
         self.model = genai.GenerativeModel(
-            "gemini-2.0-flash",
+            "gemini-3-flash-preview",
             tools=INTENT_TOOLS,
             system_instruction=(
                 "You are an intent classifier for an e-commerce store's Messenger chatbot. "

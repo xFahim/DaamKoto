@@ -52,7 +52,7 @@ class FaqHandler:
         )
 
         try:
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-3-flash-preview")
             prompt = (
                 f"Store FAQ Information:\n{faq_context}\n\n"
                 f"User Question: {message_text}\n\n"

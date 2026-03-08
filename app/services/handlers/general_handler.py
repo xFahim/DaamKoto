@@ -18,16 +18,18 @@ class GeneralHandler:
             page_id: The Facebook page ID
         """
         try:
-            model = genai.GenerativeModel("gemini-2.0-flash")
-            response = await model.generate_content_async(
-                f"User: {message_text}",
-                generation_config={"max_output_tokens": 200},
+            model = genai.GenerativeModel(
+                "gemini-3-flash-preview",
                 system_instruction=(
                     "You are a friendly sales assistant for an online store. "
                     "Keep responses short, warm, and natural (1-2 sentences max). "
                     "If the user greets you, greet back and ask how you can help. "
                     "If they thank you, respond graciously. Stay in character as a store assistant."
                 ),
+            )
+            response = await model.generate_content_async(
+                f"User: {message_text}",
+                generation_config={"max_output_tokens": 200},
             )
             reply = response.text.strip()
         except Exception as e:
