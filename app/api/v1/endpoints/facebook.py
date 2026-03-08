@@ -64,6 +64,27 @@ async def receive_webhook(payload: FacebookWebhookPayload) -> dict[str, str]:
         A success response (returned immediately)
     """
     # Fire and forget — process in background so Facebook gets 200 instantly
-    asyncio.create_task(facebook_service.process_webhook_event(payload))
+    task = asyncio.create_task(_process_webhook_safe(payload))
+    # Log any unhandled errors from the background task
+    task.add_done_callback(_log_task_exception)
 
     return {"status": "ok"}
+
+
+async def _process_webhook_safe(payload: FacebookWebhookPayload) -> None:
+    """Wrapper to catch and log exceptions from background webhook processing."""
+    try:
+        await facebook_service.process_webhook_event(payload)
+    except Exception as e:
+        print(f"❌ Background webhook processing failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Callback to log unhandled exceptions from background tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        print(f"❌ Unhandled error in background task: {exc}")
