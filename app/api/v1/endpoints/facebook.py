@@ -1,5 +1,6 @@
 """Facebook Messenger webhook endpoints."""
 
+import asyncio
 from fastapi import APIRouter, Query, Request, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from app.core.config import settings
@@ -53,17 +54,16 @@ async def receive_webhook(payload: FacebookWebhookPayload) -> dict[str, str]:
     """
     Facebook webhook message reception endpoint.
 
-    This endpoint receives incoming messages and events from Facebook Messenger.
-    It processes the payload asynchronously and returns immediately.
+    Returns 200 immediately and processes the event in the background.
+    This prevents Facebook from timing out and retrying the request.
 
     Args:
         payload: The Facebook webhook payload
 
     Returns:
-        A success response
+        A success response (returned immediately)
     """
-    # Process the webhook event (logs to console and sends replies)
-    await facebook_service.process_webhook_event(payload)
+    # Fire and forget — process in background so Facebook gets 200 instantly
+    asyncio.create_task(facebook_service.process_webhook_event(payload))
 
-    # Return 200 immediately
     return {"status": "ok"}

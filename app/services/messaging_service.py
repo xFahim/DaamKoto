@@ -3,9 +3,32 @@
 import httpx
 from app.core.config import settings
 
+GRAPH_API_URL = "https://graph.facebook.com/v18.0/me/messages"
+
 
 class MessagingService:
     """Service for handling message sending to Facebook Messenger."""
+
+    @staticmethod
+    async def send_typing_on(recipient_id: str) -> None:
+        """
+        Send a typing indicator to show the bot is processing.
+
+        Args:
+            recipient_id: The Facebook user ID to show typing to
+        """
+        params = {"access_token": settings.facebook_page_access_token}
+        payload = {
+            "recipient": {"id": recipient_id},
+            "sender_action": "typing_on",
+        }
+
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(GRAPH_API_URL, params=params, json=payload)
+        except Exception as e:
+            # Non-critical — don't fail the whole flow for a typing indicator
+            print(f"⚠️ Failed to send typing indicator: {e}")
 
     @staticmethod
     async def send_message(recipient_id: str, message_text: str) -> bool:
@@ -19,7 +42,6 @@ class MessagingService:
         Returns:
             True if the message was sent successfully, False otherwise
         """
-        url = "https://graph.facebook.com/v18.0/me/messages"
         params = {"access_token": settings.facebook_page_access_token}
         payload = {
             "recipient": {"id": recipient_id},
@@ -28,7 +50,7 @@ class MessagingService:
 
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.post(url, params=params, json=payload)
+                response = await client.post(GRAPH_API_URL, params=params, json=payload)
                 if response.status_code == 200:
                     print(f"Message sent successfully to {recipient_id}")
                     return True
@@ -44,6 +66,3 @@ class MessagingService:
 
 
 messaging_service = MessagingService()
-
-
-

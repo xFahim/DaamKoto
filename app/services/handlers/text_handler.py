@@ -33,6 +33,9 @@ class TextHandler:
             page_id: The Facebook page ID
         """
         try:
+            # Show typing indicator immediately
+            await messaging_service.send_typing_on(sender_id)
+
             # Step 1: Classify intent
             result = await intent_service.classify(message_text)
             intent = result["intent"]

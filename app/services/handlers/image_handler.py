@@ -23,6 +23,9 @@ class ImageHandler:
             page_id: The Facebook page ID
         """
         try:
+            # Show typing indicator immediately
+            await messaging_service.send_typing_on(sender_id)
+
             # Extract image URL from attachments
             image_url = ImageHandler._extract_image_url(attachments)
             if not image_url:
