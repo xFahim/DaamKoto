@@ -48,6 +48,8 @@ class TextHandler:
             }
 
             if intent == "search_products":
+                # Refresh typing indicator before the heavy RAG pipeline
+                await messaging_service.send_typing_on(sender_id)
                 # Product search → existing RAG pipeline
                 response_text = await rag_service.generate_response(
                     user_query=message_text,

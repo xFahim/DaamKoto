@@ -83,8 +83,15 @@ class RagService:
                  print(f"✅ Embedding generated. Dimension: {len(query_embedding)}")
 
             # Step 2: Retrieve candidates from Pinecone (fetch extra, filter by score)
-            MIN_SCORE = 0.55  # Below this = irrelevant noise
-            HIGH_CONFIDENCE = 0.75  # Above this = strong single match
+            # Text embeddings vs image embeddings in index = lower cosine scores (~0.05-0.20)
+            # Image embeddings vs image embeddings in index = higher cosine scores (~0.40-0.80)
+            if image_url:
+                MIN_SCORE = 0.45
+                HIGH_CONFIDENCE = 0.65
+            else:
+                MIN_SCORE = 0.08
+                HIGH_CONFIDENCE = 0.18
+            print(f"📏 Score thresholds: MIN={MIN_SCORE}, HIGH={HIGH_CONFIDENCE} ({'image' if image_url else 'text'} mode)")
 
             try:
                 if not self.pinecone_index:
