@@ -22,7 +22,7 @@ try:
             credentials=credentials
         )
 except Exception as e:
-    print(f"❌ Vertex AI Auth failed in IngestService: {e}")
+    print(f"Vertex AI Auth failed in IngestService: {e}")
 
 # Initialize Pinecone
 pc = Pinecone(api_key=settings.pinecone_api_key)
@@ -38,7 +38,7 @@ class IngestService:
         try:
             self.model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
         except Exception as e:
-            print(f"⚠️ Failed to load MultiModalEmbeddingModel in IngestService: {e}")
+            print(f"Failed to load MultiModalEmbeddingModel in IngestService: {e}")
             self.model = None
 
     async def process_and_upload(self, page_id: str, products: list) -> dict[str, Any]:
@@ -94,7 +94,7 @@ class IngestService:
                 )
                 embedding_values = embeddings.text_embedding
             except Exception as e:
-                print(f"❌ Error embedding product {name}: {e}")
+                print(f"Error embedding product {name}: {e}")
                 continue
 
             # Create vector record

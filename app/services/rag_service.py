@@ -28,7 +28,7 @@ class RagService:
             # 1. Get the JSON string from settings
             service_account_json = settings.gcp_service_account_json
             if not service_account_json:
-                print("⚠️ GCP_SERVICE_ACCOUNT_JSON not found. Vertex AI checks will fail.")
+                print("GCP_SERVICE_ACCOUNT_JSON not found. Vertex AI checks will fail.")
             else:
                 info = json.loads(service_account_json)
                 credentials = service_account.Credentials.from_service_account_info(info)
@@ -37,28 +37,28 @@ class RagService:
                     location="asia-east1",
                     credentials=credentials
                 )
-                print("✅ Vertex AI Authenticated successfully in RAG Service.")
+                print("Vertex AI Authenticated successfully in RAG Service.")
                 
                 self.embedding_model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
                 
         except Exception as e:
-            print(f"❌ Vertex AI Authentication failed in RAG Service: {e}")
+            print(f"Vertex AI Authentication failed in RAG Service: {e}")
 
         # Configure Gemini AI client for generation
         try:
             self.client = genai.Client(api_key=settings.gemini_api_key)
-            print("✅ Gemini AI Configured successfully.")
+            print("Gemini AI Configured successfully.")
         except Exception as e:
-            print(f"❌ Gemini AI Configuration failed: {e}")
+            print(f"Gemini AI Configuration failed: {e}")
 
         try:
              # Initialize Pinecone
             pc = Pinecone(api_key=settings.pinecone_api_key)
             # Connect to the multimodal index
             self.pinecone_index = pc.Index("chatpulse-multimodal")
-            print("✅ Pinecone Connected successfully.")
+            print("Pinecone Connected successfully.")
         except Exception as e:
-            print(f"❌ Pinecone Connection failed: {e}")
+            print(f"Pinecone Connection failed: {e}")
 
     async def generate_response(
         self, user_query: str, page_id: str, image_url: str | None = None
@@ -77,10 +77,10 @@ class RagService:
             )
 
             if not query_embedding:
-                print("⚠️ No embedding generated.")
+                print("No embedding generated.")
                 return "I'm sorry, I couldn't process the input to search for products."
             else:
-                 print(f"✅ Embedding generated. Dimension: {len(query_embedding)}")
+                 print(f"Embedding generated. Dimension: {len(query_embedding)}")
 
             # Step 2: Retrieve candidates from Pinecone (fetch extra, filter by score)
             # Text embeddings vs image embeddings in index = lower cosine scores (~0.05-0.20)
@@ -91,23 +91,23 @@ class RagService:
             else:
                 MIN_SCORE = 0.08
                 HIGH_CONFIDENCE = 0.18
-            print(f"📏 Score thresholds: MIN={MIN_SCORE}, HIGH={HIGH_CONFIDENCE} ({'image' if image_url else 'text'} mode)")
+            print(f"Score thresholds: MIN={MIN_SCORE}, HIGH={HIGH_CONFIDENCE} ({'image' if image_url else 'text'} mode)")
 
             try:
                 if not self.pinecone_index:
-                     print("⚠️ Pinecone index not initialized.")
+                     print("Pinecone index not initialized.")
                      return "I'm having trouble accessing the product catalog right now."
 
-                print(f"🔍 Querying Pinecone in namespace '{namespace}'...")
+                print(f"Querying Pinecone in namespace '{namespace}'...")
                 query_response = self.pinecone_index.query(
                     vector=query_embedding,
                     top_k=5,
                     include_metadata=True,
                     namespace=namespace,
                 )
-                print(f"✅ Pinecone returned {len(query_response.matches)} raw matches.")
+                print(f"Pinecone returned {len(query_response.matches)} raw matches.")
             except Exception as e:
-                print(f"❌ Pinecone query failed for namespace '{namespace}': {e}")
+                print(f"Pinecone query failed for namespace '{namespace}': {e}")
                 return "I'm having trouble accessing the product catalog right now."
 
             # Step 3: Filter matches by score threshold
@@ -119,10 +119,10 @@ class RagService:
                     name = metadata.get("name", "Unknown")
 
                     if score < MIN_SCORE:
-                        print(f"   ⛔ Skipped: {name} (Score: {score:.4f} < {MIN_SCORE})")
+                        print(f"   Skipped: {name} (Score: {score:.4f} < {MIN_SCORE})")
                         continue
 
-                    print(f"   ✅ Match: {name} (Score: {score:.4f})")
+                    print(f"   Match: {name} (Score: {score:.4f})")
                     good_matches.append({
                         "name": name,
                         "price": metadata.get("price", "N/A"),
@@ -132,7 +132,7 @@ class RagService:
                         "score": score,
                     })
 
-            print(f"📊 {len(good_matches)} matches passed score threshold.")
+            print(f"{len(good_matches)} matches passed score threshold.")
 
             # Step 4: Build prompt based on match quality
             tone_rule = (
@@ -198,7 +198,7 @@ class RagService:
             return response.text.strip()
 
         except Exception as e:
-            print(f"❌ Error in RAG service: {str(e)}")
+            print(f"Error in RAG service: {str(e)}")
             return (
                 "I apologize, but I'm having trouble processing your request right now. "
                 "Please try again later or rephrase your question."
@@ -211,7 +211,7 @@ class RagService:
         Generate 1408-dim vector using Google Vertex AI Multimodal Embedding.
         """
         if not self.embedding_model:
-            print("❌ Embedding model not initialized.")
+            print("Embedding model not initialized.")
             return []
 
         try:
@@ -240,7 +240,7 @@ class RagService:
             return []
 
         except Exception as e:
-            print(f"❌ Error getting embedding from Vertex AI: {repr(e)}")
+            print(f"Error getting embedding from Vertex AI: {repr(e)}")
             return []
 
 

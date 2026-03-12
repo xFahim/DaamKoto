@@ -76,7 +76,7 @@ async def _process_webhook_safe(payload: FacebookWebhookPayload) -> None:
     try:
         await facebook_service.process_webhook_event(payload)
     except Exception as e:
-        print(f"❌ Background webhook processing failed: {e}")
+        print(f"Background webhook processing failed: {e}")
         import traceback
         traceback.print_exc()
 
@@ -87,4 +87,4 @@ def _log_task_exception(task: asyncio.Task) -> None:
         return
     exc = task.exception()
     if exc:
-        print(f"❌ Unhandled error in background task: {exc}")
+        print(f"Unhandled error in background task: {exc}")

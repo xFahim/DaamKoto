@@ -42,7 +42,7 @@ class GeneralHandler:
             )
             reply = response.text.strip()
         except Exception as e:
-            print(f"❌ General handler error: {e}")
+            print(f"General handler error: {e}")
             reply = "Hey there! 👋 How can I help you today?"
 
         await messaging_service.send_message(

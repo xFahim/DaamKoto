@@ -28,7 +28,7 @@ class MessagingService:
                 await client.post(GRAPH_API_URL, params=params, json=payload)
         except Exception as e:
             # Non-critical — don't fail the whole flow for a typing indicator
-            print(f"⚠️ Failed to send typing indicator: {e}")
+            print(f"Failed to send typing indicator: {e}")
 
     @staticmethod
     async def send_message(recipient_id: str, message_text: str) -> bool:

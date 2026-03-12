@@ -76,7 +76,7 @@ class FaqHandler:
             )
             reply = response.text.strip()
         except Exception as e:
-            print(f"❌ FAQ handler error: {e}")
+            print(f"FAQ handler error: {e}")
             reply = (
                 "I'm having a little trouble right now! "
                 "You can reach us at support@goodybro.com for any questions. 😊"

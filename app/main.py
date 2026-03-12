@@ -9,12 +9,12 @@ from app.services.intent_service import intent_service
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize services
-    print("🚀 Starting up and initializing services...")
+    print("Starting up and initializing services...")
     intent_service.initialize()
     await rag_service.initialize()
     yield
     # Shutdown: Clean up resources if needed
-    print("🛑 Shutting down...")
+    print("Shutting down...")
 
 app = FastAPI(
     title="DaamKoto",

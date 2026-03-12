@@ -63,11 +63,11 @@ class TextHandler:
                 await self.INTENT_HANDLERS[intent](self, **handler_kwargs)
             else:
                 # Unknown intent — fall back to general chat
-                print(f"⚠️ Unknown intent '{intent}', falling back to general_chat.")
+                print(f"Unknown intent '{intent}', falling back to general_chat.")
                 await general_handler.process(**handler_kwargs)
 
         except Exception as e:
-            print(f"❌ Error in text handler: {str(e)}")
+            print(f"Error in text handler: {str(e)}")
             await messaging_service.send_message(
                 recipient_id=sender_id,
                 message_text=(

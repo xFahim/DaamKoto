@@ -96,7 +96,7 @@ class IntentService:
     def initialize(self):
         """Configure Gemini client for classification."""
         self.client = genai.Client(api_key=settings.gemini_api_key)
-        print("✅ Intent classification service initialized.")
+        print("Intent classification service initialized.")
 
     async def classify(self, message: str) -> dict:
         """
@@ -110,7 +110,7 @@ class IntentService:
             Example: {"intent": "search_products", "params": {"query": "red t-shirt"}}
         """
         if not self.client:
-            print("⚠️ Intent service not initialized, defaulting to general_chat.")
+            print("Intent service not initialized, defaulting to general_chat.")
             return {"intent": "general_chat", "params": {"message": message}}
 
         try:
@@ -138,11 +138,11 @@ class IntentService:
             intent = fn_call.name
             params = dict(fn_call.args)
 
-            print(f"🎯 Intent classified: {intent} | Params: {params}")
+            print(f"Intent classified: {intent} | Params: {params}")
             return {"intent": intent, "params": params}
 
         except Exception as e:
-            print(f"⚠️ Intent classification failed: {e}. Falling back to general_chat.")
+            print(f"Intent classification failed: {e}. Falling back to general_chat.")
             return {"intent": "general_chat", "params": {"message": message}}
 
 
