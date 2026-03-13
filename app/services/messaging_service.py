@@ -24,7 +24,7 @@ class MessagingService:
         }
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(GRAPH_API_URL, params=params, json=payload)
         except Exception as e:
             # Non-critical — don't fail the whole flow for a typing indicator
@@ -49,7 +49,7 @@ class MessagingService:
         }
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(GRAPH_API_URL, params=params, json=payload)
                 if response.status_code == 200:
                     print(f"Message sent successfully to {recipient_id}")

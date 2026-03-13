@@ -61,7 +61,7 @@ class RagService:
             print(f"Pinecone Connection failed: {e}")
 
     async def generate_response(
-        self, user_query: str, page_id: str, image_url: str | None = None
+        self, user_query: str, page_id: str, image_url: str | None = None, history: str = ""
     ) -> str:
         """
         Generate an AI response using RAG (Retrieval-Augmented Generation).
@@ -142,6 +142,7 @@ class RagService:
                 "- If they write in Bangla (বাংলা), reply in Bangla.\n"
                 "Match their tone and language exactly."
             )
+            history_block = f"\n\nRecent conversation:\n{history}" if history else ""
 
             if not good_matches:
                 # No relevant products found
@@ -151,6 +152,7 @@ class RagService:
                     "Let them know casually — don't be robotic. Maybe suggest they describe "
                     "it differently or ask if they want something else."
                     f"{tone_rule}"
+                    f"{history_block}"
                 )
             elif len(good_matches) == 1 and good_matches[0]["score"] >= HIGH_CONFIDENCE:
                 # Single strong match — confident suggestion
@@ -164,6 +166,7 @@ class RagService:
                     "If they want more options, let them know they can ask.\n\n"
                     f"Product:\n{context}"
                     f"{tone_rule}"
+                    f"{history_block}"
                 )
             else:
                 # Multiple matches — show options casually
@@ -187,6 +190,7 @@ class RagService:
                     "If only some are relevant, focus on the best one and mention the others as alternatives.\n\n"
                     f"Products:\n{context}"
                     f"{tone_rule}"
+                    f"{history_block}"
                 )
 
             # Step 5: Generate response using Gemini

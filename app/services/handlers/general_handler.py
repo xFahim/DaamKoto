@@ -3,7 +3,6 @@
 from google import genai
 from google.genai import types
 from app.core.config import settings
-from app.services.messaging_service import messaging_service
 
 # Shared client instance
 client = genai.Client(api_key=settings.gemini_api_key)
@@ -13,7 +12,7 @@ class GeneralHandler:
     """Handles greetings, chitchat, and non-product queries with a direct Gemini call."""
 
     @staticmethod
-    async def process(sender_id: str, message_text: str, page_id: str) -> None:
+    async def process(sender_id: str, message_text: str, page_id: str, history: str = "") -> str:
         """
         Generate a friendly conversational response (no RAG needed).
 
@@ -22,6 +21,7 @@ class GeneralHandler:
             message_text: The user's message
             page_id: The Facebook page ID
         """
+        history_block = f"\n\nConversation so far:\n{history}" if history else ""
         try:
             response = await client.aio.models.generate_content(
                 model="gemini-2.5-flash",
@@ -36,6 +36,7 @@ class GeneralHandler:
                         "- If they write in Banglish (Bengali in English letters like 'kemon acho'), reply in Banglish.\n"
                         "- If they write in Bangla (বাংলা), reply in Bangla.\n"
                         "Match their vibe and language exactly."
+                        f"{history_block}"
                     ),
                     max_output_tokens=150,
                 ),
@@ -43,12 +44,9 @@ class GeneralHandler:
             reply = response.text.strip()
         except Exception as e:
             print(f"General handler error: {e}")
-            reply = "Hey there! 👋 How can I help you today?"
+            reply = "Hey there! How can I help you today?"
 
-        await messaging_service.send_message(
-            recipient_id=sender_id,
-            message_text=reply,
-        )
+        return reply
 
 
 general_handler = GeneralHandler()

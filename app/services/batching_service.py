@@ -17,9 +17,7 @@ class MessageBatcher:
         is_first = sender_id not in self._pending_messages
         self._pending_messages.setdefault(sender_id, []).append(text)
 
-        if is_first:
-            await messaging_service.send_typing_on(sender_id)
-
+        # Reset timer BEFORE any awaits so slow Meta API calls can't hijack the timer
         existing = self._timers.get(sender_id)
         if existing and not existing.done():
             existing.cancel()
@@ -27,6 +25,10 @@ class MessageBatcher:
         self._timers[sender_id] = asyncio.create_task(
             self._process_batch(sender_id, page_id)
         )
+
+        # Non-critical — send after timer is locked in; failure doesn't affect batching
+        if is_first:
+            await messaging_service.send_typing_on(sender_id)
 
     async def _process_batch(self, sender_id: str, page_id: str) -> None:
         """Wait for debounce window, then flush batch to TextHandler."""
@@ -44,11 +46,16 @@ class MessageBatcher:
 
         combined_text = "\n".join(messages)
         try:
-            await text_handler.process(
-                sender_id=sender_id,
-                message_text=combined_text,
-                page_id=page_id,
+            await asyncio.wait_for(
+                text_handler.process(
+                    sender_id=sender_id,
+                    message_text=combined_text,
+                    page_id=page_id,
+                ),
+                timeout=60.0,
             )
+        except asyncio.TimeoutError:
+            print(f"[MessageBatcher] Batch processing timed out for {sender_id}")
         except Exception as e:
             print(f"[MessageBatcher] Error processing batch for {sender_id}: {e}")
 

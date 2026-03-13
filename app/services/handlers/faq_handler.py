@@ -3,7 +3,6 @@
 from google import genai
 from google.genai import types
 from app.core.config import settings
-from app.services.messaging_service import messaging_service
 
 
 # Dummy FAQ data — will be replaced with DB lookup per store later
@@ -41,7 +40,7 @@ class FaqHandler:
     """Handles FAQ queries using dummy store data + Gemini for natural responses."""
 
     @staticmethod
-    async def process(sender_id: str, message_text: str, page_id: str) -> None:
+    async def process(sender_id: str, message_text: str, page_id: str, history: str = "") -> str:
         """
         Look up FAQ data and generate a natural response via Gemini.
 
@@ -56,9 +55,11 @@ class FaqHandler:
             for key, value in FAQ_DATA.items()
         )
 
+        history_section = f"Recent conversation:\n{history}\n\n" if history else ""
         try:
             prompt = (
                 f"Store FAQ Information:\n{faq_context}\n\n"
+                f"{history_section}"
                 f"User Question: {message_text}\n\n"
                 "Answer using ONLY the FAQ info above. Keep it short and natural — "
                 "like a real person replying on Messenger, not a help page. "
@@ -79,13 +80,10 @@ class FaqHandler:
             print(f"FAQ handler error: {e}")
             reply = (
                 "I'm having a little trouble right now! "
-                "You can reach us at support@goodybro.com for any questions. 😊"
+                "You can reach us at support@goodybro.com for any questions."
             )
 
-        await messaging_service.send_message(
-            recipient_id=sender_id,
-            message_text=reply,
-        )
+        return reply
 
 
 faq_handler = FaqHandler()

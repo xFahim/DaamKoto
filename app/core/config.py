@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     pinecone_api_key: str
     gcp_service_account_json: str | None = None
     message_batch_timeout: float = 2.5
+    conversation_ttl: int = 600
+    conversation_max_turns: int = 5
 
     model_config = SettingsConfigDict(
         env_file=".env",
