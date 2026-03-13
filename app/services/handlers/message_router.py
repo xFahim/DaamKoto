@@ -1,7 +1,7 @@
 """Router for categorizing and routing messages to appropriate handlers."""
 
 from typing import Any
-from app.services.handlers.text_handler import text_handler
+from app.services.batching_service import message_batcher
 from app.services.handlers.image_handler import image_handler
 from app.services.messaging_service import messaging_service
 
@@ -28,9 +28,9 @@ class MessageRouter:
 
         # Check if message has text
         if message.get("text"):
-            await text_handler.process(
+            await message_batcher.add_text_message(
                 sender_id=sender_id,
-                message_text=message["text"],
+                text=message["text"],
                 page_id=page_id,
             )
             return

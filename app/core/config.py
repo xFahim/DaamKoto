@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     gemini_api_key: str
     pinecone_api_key: str
     gcp_service_account_json: str | None = None
+    message_batch_timeout: float = 2.5
 
     model_config = SettingsConfigDict(
         env_file=".env",

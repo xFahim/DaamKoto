@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from app.api.router import api_router
 from app.services.rag_service import rag_service
 from app.services.intent_service import intent_service
+from app.services.batching_service import message_batcher
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -15,6 +16,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: Clean up resources if needed
     print("Shutting down...")
+    await message_batcher.shutdown()
 
 app = FastAPI(
     title="DaamKoto",
