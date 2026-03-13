@@ -24,7 +24,7 @@ class GeneralHandler:
         history_block = f"\n\nConversation so far:\n{history}" if history else ""
         try:
             response = await client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3-flash-preview",
                 contents=f"User: {message_text}",
                 config=types.GenerateContentConfig(
                     system_instruction=(

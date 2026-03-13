@@ -196,7 +196,7 @@ class RagService:
             # Step 5: Generate response using Gemini
             full_prompt = f"{system_prompt}\n\nUser: {user_query or 'Find this product'}"
             response = await self.client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3-flash-preview",
                 contents=full_prompt,
             )
             return response.text.strip()
