@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     message_batch_timeout: float = 2.5
     conversation_ttl: int = 600
     conversation_max_turns: int = 5
+    max_message_length: int = 500       # chars per individual message; override via MAX_MESSAGE_LENGTH
+    rate_limit_messages: int = 15       # max messages per window; override via RATE_LIMIT_MESSAGES
+    rate_limit_window: int = 60         # window in seconds; override via RATE_LIMIT_WINDOW
 
     model_config = SettingsConfigDict(
         env_file=".env",

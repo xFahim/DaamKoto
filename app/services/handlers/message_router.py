@@ -4,6 +4,8 @@ from typing import Any
 from app.services.batching_service import message_batcher
 from app.services.handlers.image_handler import image_handler
 from app.services.messaging_service import messaging_service
+from app.services.input_guard import input_guard
+from app.core.config import settings
 
 
 class MessageRouter:
@@ -28,11 +30,32 @@ class MessageRouter:
 
         # Check if message has text
         if message.get("text"):
-            await message_batcher.add_text_message(
-                sender_id=sender_id,
-                text=message["text"],
-                page_id=page_id,
-            )
+            status, payload = input_guard.check(sender_id, message["text"])
+
+            if status == "ok":
+                await message_batcher.add_text_message(
+                    sender_id=sender_id,
+                    text=payload,
+                    page_id=page_id,
+                )
+            elif status == "reject":
+                if payload == "too_long":
+                    await messaging_service.send_message(
+                        recipient_id=sender_id,
+                        message_text=(
+                            f"Please keep your message under {settings.max_message_length} characters "
+                            "so I can understand you better!"
+                        ),
+                    )
+                elif payload == "rate_limited":
+                    await messaging_service.send_message(
+                        recipient_id=sender_id,
+                        message_text=(
+                            "You're sending messages too fast! "
+                            "Take a moment and try again."
+                        ),
+                    )
+            # status == "silent_drop": do nothing
             return
 
         # Check if message has image attachments
