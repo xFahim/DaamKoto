@@ -64,5 +64,37 @@ class MessagingService:
             print(f"Error sending message: {str(e)}")
             return False
 
+    @staticmethod
+    async def send_image(recipient_id: str, image_url: str) -> bool:
+        """
+        Send an image via Facebook Messenger API.
+        """
+        params = {"access_token": settings.facebook_page_access_token}
+        payload = {
+            "recipient": {"id": recipient_id},
+            "message": {
+                "attachment": {
+                    "type": "image",
+                    "payload": {
+                        "url": image_url,
+                        "is_reusable": True
+                    }
+                }
+            }
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(GRAPH_API_URL, params=params, json=payload)
+                if response.status_code == 200:
+                    print(f"Image sent successfully to {recipient_id}")
+                    return True
+                else:
+                    print(f"Failed to send image. Status: {response.status_code}, Response: {response.text}")
+                    return False
+        except Exception as e:
+            print(f"Error sending image: {str(e)}")
+            return False
+
 
 messaging_service = MessagingService()

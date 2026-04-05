@@ -4,14 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.api.router import api_router
 from app.services.rag_service import rag_service
-from app.services.intent_service import intent_service
+from app.services.agent_service import agent_service
 from app.services.batching_service import message_batcher
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Initialize services
     print("Starting up and initializing services...")
-    intent_service.initialize()
+    agent_service.initialize()
     await rag_service.initialize()
     yield
     # Shutdown: Clean up resources if needed

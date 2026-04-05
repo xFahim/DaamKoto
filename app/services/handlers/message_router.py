@@ -33,7 +33,7 @@ class MessageRouter:
             status, payload = input_guard.check(sender_id, message["text"])
 
             if status == "ok":
-                await message_batcher.add_text_message(
+                await message_batcher.add_message(
                     sender_id=sender_id,
                     text=payload,
                     page_id=page_id,
@@ -55,23 +55,19 @@ class MessageRouter:
                             "Take a moment and try again."
                         ),
                     )
-            # status == "silent_drop": do nothing
-            return
 
         # Check if message has image attachments
         attachments = message.get("attachments")
         if attachments:
-            # Check if any attachment is an image
-            has_image = any(
-                att.get("type") == "image" for att in attachments if isinstance(att, dict)
-            )
-            if has_image:
-                await image_handler.process(
+            # We import here locally to avoid circular dependencies if any
+            from app.services.handlers.image_handler import ImageHandler
+            image_url = ImageHandler._extract_image_url(attachments)
+            if image_url:
+                await message_batcher.add_message(
                     sender_id=sender_id,
-                    attachments=attachments,
                     page_id=page_id,
+                    image_url=image_url
                 )
-                return
 
         # If message doesn't match any category, send a default response
         await MessageRouter._send_unsupported_message(sender_id)

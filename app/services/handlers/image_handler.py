@@ -2,11 +2,11 @@
 
 from typing import Any
 from app.services.messaging_service import messaging_service
-from app.services.rag_service import rag_service
+from app.services.agent_service import agent_service
 
 
 class ImageHandler:
-    """Handler for processing image-based messages."""
+    """Handler for processing image-based messages using Agentic orchestration."""
 
     @staticmethod
     async def process(
@@ -15,12 +15,7 @@ class ImageHandler:
         page_id: str,
     ) -> None:
         """
-        Process an image message, analyze it, and send a response.
-
-        Args:
-            sender_id: The Facebook user ID who sent the message
-            attachments: List of attachment dictionaries from Facebook
-            page_id: The Facebook page ID
+        Process an image message by providing it directly to the Agent.
         """
         try:
             # Show typing indicator immediately
@@ -35,15 +30,16 @@ class ImageHandler:
                 )
                 return
 
-            # Use RAG service to search inventory using image embeddings
-            response_text = await rag_service.generate_response(
-                user_query="Find this product",
-                page_id=page_id,
-                image_url=image_url,
+            # Native Agent Integration: Feed the image straight into the brain's memory
+            reply = await agent_service.process(
+                sender_id=sender_id,
+                message_text="Can you identify this product? I'm interested in it.",
+                image_url=image_url
             )
+            
             await messaging_service.send_message(
                 recipient_id=sender_id,
-                message_text=response_text,
+                message_text=reply,
             )
         except Exception as e:
             print(f"Error processing image: {str(e)}")
