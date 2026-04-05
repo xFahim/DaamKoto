@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     gemini_api_key: str
     pinecone_api_key: str
     gcp_service_account_json: str | None = None
-    message_batch_timeout: float = 2.5
+    message_batch_timeout: float = 4
     conversation_ttl: int = 600
     conversation_max_turns: int = 5
     max_message_length: int = 500       # chars per individual message; override via MAX_MESSAGE_LENGTH

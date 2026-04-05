@@ -28,6 +28,8 @@ class MessageRouter:
         if not message:
             return
 
+        handled = False
+
         # Check if message has text
         if message.get("text"):
             status, payload = input_guard.check(sender_id, message["text"])
@@ -38,7 +40,9 @@ class MessageRouter:
                     text=payload,
                     page_id=page_id,
                 )
+                handled = True
             elif status == "reject":
+                handled = True
                 if payload == "too_long":
                     await messaging_service.send_message(
                         recipient_id=sender_id,
@@ -55,22 +59,31 @@ class MessageRouter:
                             "Take a moment and try again."
                         ),
                     )
+            elif status == "silent_drop":
+                handled = True
 
         # Check if message has image attachments
         attachments = message.get("attachments")
         if attachments:
             # We import here locally to avoid circular dependencies if any
             from app.services.handlers.image_handler import ImageHandler
-            image_url = ImageHandler._extract_image_url(attachments)
-            if image_url:
-                await message_batcher.add_message(
-                    sender_id=sender_id,
-                    page_id=page_id,
-                    image_url=image_url
-                )
+            has_image = False
+            
+            # The attachment parsing logic was slightly flawed, we iterate to see if ANY attachment is an image
+            for att in attachments:
+                if isinstance(att, dict) and att.get("type") == "image":
+                    url = att.get("payload", {}).get("url")
+                    if url:
+                        await message_batcher.add_message(
+                            sender_id=sender_id,
+                            page_id=page_id,
+                            image_url=url
+                        )
+                        handled = True
 
         # If message doesn't match any category, send a default response
-        await MessageRouter._send_unsupported_message(sender_id)
+        if not handled:
+            await MessageRouter._send_unsupported_message(sender_id)
 
     @staticmethod
     async def _send_unsupported_message(sender_id: str) -> None:
