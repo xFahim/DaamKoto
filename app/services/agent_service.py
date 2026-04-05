@@ -40,8 +40,16 @@ class AgentService:
                 result = execute_order(**args)
             elif name == "send_product_image":
                 url = args.get("image_url", "")
-                await messaging_service.send_image(sender_id, url)
-                result = send_product_image(url)
+                print(f"[AGENT TOOL] Attempting to send image via Messenger Graph API. URL: '{url}'")
+                if not url or url.lower() in ["none", "null", "undefined"]:
+                    print("[AGENT TOOL] Aborting image dispatch: Expected a valid URL, got empty string.")
+                    result = {"status": "Failed: You must provide a valid image_url string."}
+                else:
+                    success = await messaging_service.send_image(sender_id, url)
+                    if success:
+                        result = {"status": "Image successfully dispatched to the user interface."}
+                    else:
+                        result = {"status": "Failed to dispatch image to Facebook. Invalid URL format or Facebook API error."}
             else:
                 result = {"error": f"Unknown tool: {name}"}
         except Exception as e:
