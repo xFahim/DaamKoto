@@ -208,6 +208,56 @@ class RagService:
                 "Please try again later or rephrase your question."
             )
 
+    async def search_catalog(self, query: str, page_id: str) -> list[dict]:
+        """
+        Search Pinecone for product matches and return raw JSON data for the Agent.
+        """
+        namespace = f"store_{page_id}"
+        
+        try:
+            query_embedding = await self.get_multimodal_embedding(text=query)
+            if not query_embedding:
+                print("No embedding generated for RAG search.")
+                return []
+                
+            if not self.pinecone_index:
+                print("Pinecone index not initialized.")
+                return []
+
+            query_response = self.pinecone_index.query(
+                vector=query_embedding,
+                top_k=5,
+                include_metadata=True,
+                namespace=namespace,
+            )
+            
+            good_matches = []
+            MIN_SCORE = 0.08
+            if query_response.matches:
+                for match in query_response.matches:
+                    score = match.score
+                    metadata = match.metadata or {}
+                    
+                    if score < MIN_SCORE:
+                        continue
+                        
+                    good_matches.append({
+                        "id": metadata.get("ID", ""),
+                        "name": metadata.get("name", "Unknown"),
+                        "price": metadata.get("price", "N/A"),
+                        "stock": metadata.get("stock", "N/A"),
+                        "description": metadata.get("description", ""),
+                        "product_url": metadata.get("product_url", ""),
+                        "image_url": metadata.get("url", ""),
+                        "score": score,
+                    })
+            
+            return good_matches
+            
+        except Exception as e:
+            print(f"RAG Catalog Search failed: {e}")
+            return []
+
     async def get_multimodal_embedding(
         self, text: str | None = None, image_url: str | None = None
     ) -> List[float]:

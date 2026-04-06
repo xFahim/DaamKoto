@@ -29,6 +29,7 @@ async def main():
 
     agent_service.initialize()
     sender_id = "console_test_user_001"
+    page_id = "goodybro"
     
     print("\n[System] Chat session started. Type 'quit' to exit.")
     print("[System] To simulate an image upload, type: image:https://example.com/img.jpg [optional text]")
@@ -57,7 +58,8 @@ async def main():
         reply = await agent_service.process(
             sender_id, 
             user_input, 
-            image_urls=[image_url] if image_url else None
+            image_urls=[image_url] if image_url else None,
+            page_id=page_id
         )
         print(f"\nAgent: {reply}")
 

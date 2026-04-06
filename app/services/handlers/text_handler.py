@@ -23,7 +23,7 @@ class TextHandler:
             await messaging_service.send_typing_on(sender_id)
 
             # Let the agent handle the entire multi-turn logic
-            reply = await agent_service.process(sender_id, message_text, image_urls=image_urls)
+            reply = await agent_service.process(sender_id, message_text, image_urls=image_urls, page_id=page_id)
 
             # Artificial human typing delay (e.g., 50 chars per sec, bounded 1.5s to 4s)
             delay = min(4.0, max(1.5, len(reply) / 50.0))

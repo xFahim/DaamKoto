@@ -22,7 +22,7 @@ class AgentService:
         self.client = genai.Client(api_key=settings.gemini_api_key)
         print("Agent service initialized.")
 
-    async def _execute_tool(self, call: types.FunctionCall, sender_id: str) -> dict:
+    async def _execute_tool(self, call: types.FunctionCall, sender_id: str, page_id: str) -> dict:
         """Dynamically execute the matched python tool."""
         name = call.name
         args = dict(call.args) if call.args else {}
@@ -33,7 +33,9 @@ class AgentService:
         
         try:
             if name == "search_products":
-                result = search_products(**args)
+                from app.services.rag_service import rag_service
+                products = await rag_service.search_catalog(query=args.get("query", ""), page_id=page_id)
+                result = {"products_found": products} if products else {"message": "No relevant products found in the catalog."}
             elif name == "get_company_policy":
                 result = get_company_policy(**args)
             elif name == "execute_order":
@@ -58,7 +60,7 @@ class AgentService:
             
         return result
 
-    async def process(self, sender_id: str, message_text: str = "", image_urls: list[str] = None) -> str:
+    async def process(self, sender_id: str, message_text: str = "", image_urls: list[str] = None, page_id: str = "") -> str:
         """
         Process a message through the ReAct agent loop.
         """
@@ -181,7 +183,7 @@ class AgentService:
             # Execute tools
             tool_responses = []
             for call in tool_calls:
-                result = await self._execute_tool(call, sender_id)
+                result = await self._execute_tool(call, sender_id, page_id)
                 
                 # Gemini FunctionResponse strictly requires a dictionary payload
                 if not isinstance(result, dict):
