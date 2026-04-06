@@ -12,8 +12,8 @@ def search_products(query: str) -> list[dict]:
     print(f"[TOOL EXECUTION] search_products called with query: {query}")
     # Dummy mock response, we will wire this to RAG later
     return [
-        {"product_id": "P101", "name": "Red Classic T-Shirt", "price": 500, "sizes": ["M", "L", "XL"], "in_stock": True, "image_url": "https://upload.wikimedia.org/wikipedia/commons/2/24/Red_T_Shirt.jpg"},
-        {"product_id": "P102", "name": "Premium Red Hoodie", "price": 1500, "sizes": ["L"], "in_stock": True, "image_url": "https://upload.wikimedia.org/wikipedia/commons/4/4b/Red_hoodie_2.jpg"}
+        {"product_id": "P101", "name": "Red Classic T-Shirt", "price": 500, "sizes": ["M", "L", "XL"], "in_stock": True, "image_url": "https://dummyimage.com/400x400/ff0000/ffffff.png&text=Red+T-Shirt"},
+        {"product_id": "P102", "name": "Premium Red Hoodie", "price": 1500, "sizes": ["L"], "in_stock": True, "image_url": "https://dummyimage.com/400x400/cc0000/ffffff.png&text=Red+Hoodie"}
     ]
 
 def get_company_policy(topic: str) -> str:
