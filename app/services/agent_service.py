@@ -155,6 +155,10 @@ class AgentService:
                 memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=err_reply)]))
                 return err_reply
 
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                usage = response.usage_metadata
+                print(f"[Agent Token Usage] Prompt: {usage.prompt_token_count or 0} | Output: {usage.candidates_token_count or 0} | Total: {usage.total_token_count or 0}")
+
             if not response.candidates:
                 err_reply = "I'm not sure how to respond to that."
                 memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=err_reply)]))
