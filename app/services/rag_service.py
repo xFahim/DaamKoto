@@ -20,7 +20,9 @@ class RagService:
     def __init__(self):
         self.embedding_model = None
         self.pinecone_index = None
-        self.client = None
+        self.client = None          # Gemini client
+        self.openai_client = None   # OpenAI client
+        self.provider = settings.llm_provider.lower().strip()
 
     async def initialize(self):
         """Initialize Vertex AI, Gemini client, and Pinecone connections."""
@@ -44,12 +46,20 @@ class RagService:
         except Exception as e:
             print(f"Vertex AI Authentication failed in RAG Service: {e}")
 
-        # Configure Gemini AI client for generation
+        # Configure LLM client for generation
         try:
             self.client = genai.Client(api_key=settings.gemini_api_key)
             print("Gemini AI Configured successfully.")
         except Exception as e:
             print(f"Gemini AI Configuration failed: {e}")
+
+        if self.provider == "openai" and settings.openai_api_key:
+            try:
+                from openai import AsyncOpenAI
+                self.openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+                print("OpenAI Configured successfully for RAG.")
+            except Exception as e:
+                print(f"OpenAI Configuration failed in RAG: {e}")
 
         try:
              # Initialize Pinecone
@@ -193,13 +203,25 @@ class RagService:
                     f"{history_block}"
                 )
 
-            # Step 5: Generate response using Gemini
+            # Step 5: Generate response using configured LLM provider
             full_prompt = f"{system_prompt}\n\nUser: {user_query or 'Find this product'}"
-            response = await self.client.aio.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=full_prompt,
-            )
-            return response.text.strip()
+
+            if self.provider == "openai" and self.openai_client:
+                oai_response = await self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_query or "Find this product"},
+                    ],
+                    temperature=0.7,
+                )
+                return oai_response.choices[0].message.content.strip()
+            else:
+                response = await self.client.aio.models.generate_content(
+                    model="gemini-3-flash-preview",
+                    contents=full_prompt,
+                )
+                return response.text.strip()
 
         except Exception as e:
             print(f"Error in RAG service: {str(e)}")

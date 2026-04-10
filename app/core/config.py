@@ -9,8 +9,10 @@ class Settings(BaseSettings):
     facebook_verify_token: str
     facebook_page_access_token: str
     gemini_api_key: str
+    openai_api_key: str | None = None
     pinecone_api_key: str
     gcp_service_account_json: str | None = None
+    llm_provider: str = "gemini"  # "gemini" or "openai"
     message_batch_timeout: float = 4
     conversation_ttl: int = 600
     conversation_max_turns: int = 5

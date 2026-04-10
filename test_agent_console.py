@@ -23,7 +23,13 @@ async def main():
     print("🤖 DaamKoto Agentic Console Tester (Local Mode)")
     print("=" * 70)
     
-    if not settings.gemini_api_key:
+    provider = settings.llm_provider.lower().strip()
+    print(f"[System] LLM Provider: {provider}")
+
+    if provider == "openai" and not settings.openai_api_key:
+        print("ERROR: OPENAI_API_KEY is not set but LLM_PROVIDER=openai.")
+        sys.exit(1)
+    elif provider != "openai" and not settings.gemini_api_key:
         print("ERROR: GEMINI_API_KEY is not set.")
         sys.exit(1)
 
