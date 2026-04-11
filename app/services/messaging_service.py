@@ -96,6 +96,11 @@ class MessagingService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(GRAPH_API_URL, params=params, json=payload)
                 if response.status_code == 200:
+                    # Store bot image mid → description for reply-to resolution
+                    resp_data = response.json()
+                    bot_mid = resp_data.get("message_id")
+                    if bot_mid:
+                        store_mid(bot_mid, f"[Bot sent a product image: {image_url}]")
                     logger.debug(f"Image delivered to {recipient_id}")
                     return True
                 else:
