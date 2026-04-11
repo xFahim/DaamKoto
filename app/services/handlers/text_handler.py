@@ -1,7 +1,10 @@
 """Handler for processing text messages from Facebook Messenger."""
 
+from app.core.logging_config import get_logger
 from app.services.agent_service import agent_service
 from app.services.messaging_service import messaging_service
+
+logger = get_logger(__name__)
 
 
 class TextHandler:
@@ -36,8 +39,10 @@ class TextHandler:
                 message_text=reply,
             )
 
+            logger.info(f"[{sender_id}] ✅ Reply sent ({len(reply)} chars)")
+
         except Exception as e:
-            print(f"Error in text handler: {str(e)}")
+            logger.error(f"[{sender_id}] Text handler error: {e}", exc_info=True)
             await messaging_service.send_message(
                 recipient_id=sender_id,
                 message_text=(

@@ -1,11 +1,15 @@
 """Multi-turn agentic service supporting Gemini and OpenAI providers."""
 
 import json
+import time
 import httpx
 from app.core.config import settings
+from app.core.logging_config import get_logger
 from app.core.tools import search_products, get_company_policy, execute_order, send_product_image
 from app.services.memory_service import memory_service
 from app.services.messaging_service import messaging_service
+
+logger = get_logger(__name__)
 
 
 # System instruction shared by both providers
@@ -37,26 +41,28 @@ class AgentService:
     def initialize(self):
         """Configure the LLM client based on the selected provider."""
         self.provider = settings.llm_provider.lower().strip()
-        print(f"[Agent] Initializing with provider: {self.provider}")
+        logger.info(f"Initializing agent with provider: {self.provider}")
 
         if self.provider == "openai":
             from openai import AsyncOpenAI
             if not settings.openai_api_key:
                 raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
             self.openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
-            print("Agent service initialized with OpenAI (gpt-4o-mini).")
+            logger.info("Agent service initialized — OpenAI (gpt-4o-mini)")
         else:
             from google import genai
             self.gemini_client = genai.Client(api_key=settings.gemini_api_key)
             self.provider = "gemini"
-            print("Agent service initialized with Gemini.")
+            logger.info("Agent service initialized — Gemini (gemini-3-flash-preview)")
 
     async def _execute_tool(self, call_name: str, call_args: dict, sender_id: str, page_id: str) -> dict:
         """Dynamically execute the matched python tool."""
-        print(f"Executing tool {call_name} with args {call_args}")
+        logger.info(f"[{sender_id}] 🔧 TOOL CALL: {call_name}({json.dumps(call_args, ensure_ascii=False)})")
 
         # Send typing to show we're doing stuff
         await messaging_service.send_typing_on(sender_id)
+
+        tool_start = time.perf_counter()
 
         try:
             if call_name == "search_products":
@@ -69,9 +75,8 @@ class AgentService:
                 result = execute_order(**call_args)
             elif call_name == "send_product_image":
                 url = call_args.get("image_url", "")
-                print(f"[AGENT TOOL] Attempting to send image via Messenger Graph API. URL: '{url}'")
                 if not url or url.lower() in ["none", "null", "undefined"]:
-                    print("[AGENT TOOL] Aborting image dispatch: Expected a valid URL, got empty string.")
+                    logger.warning(f"[{sender_id}] send_product_image called with invalid URL: '{url}'")
                     result = {"status": "Failed: You must provide a valid image_url string."}
                 else:
                     success = await messaging_service.send_image(sender_id, url)
@@ -82,12 +87,19 @@ class AgentService:
             else:
                 result = {"error": f"Unknown tool: {call_name}"}
         except Exception as e:
-            print(f"Error executing tool {call_name}: {str(e)}")
+            logger.error(f"[{sender_id}] Tool {call_name} raised exception: {e}", exc_info=True)
             result = {"error": str(e)}
 
         # Ensure result is always a dict
         if not isinstance(result, dict):
             result = {"result": result}
+
+        elapsed_ms = (time.perf_counter() - tool_start) * 1000
+        # Truncate result for log readability
+        result_preview = json.dumps(result, ensure_ascii=False)
+        if len(result_preview) > 300:
+            result_preview = result_preview[:300] + "…"
+        logger.info(f"[{sender_id}] 🔧 TOOL RESULT ({call_name}, {elapsed_ms:.0f}ms): {result_preview}")
 
         return result
 
@@ -97,10 +109,30 @@ class AgentService:
 
     async def process(self, sender_id: str, message_text: str = "", image_urls: list[str] = None, page_id: str = "") -> str:
         """Process a message through the ReAct agent loop."""
+        # Truncate message for log readability
+        msg_preview = (message_text[:120] + "…") if len(message_text) > 120 else message_text
+        img_count = len(image_urls) if image_urls else 0
+        logger.info(
+            f"[{sender_id}] ━━━ INCOMING ━━━ provider={self.provider} | "
+            f"text=\"{msg_preview}\" | images={img_count}"
+        )
+
+        request_start = time.perf_counter()
+
         if self.provider == "openai":
-            return await self._process_openai(sender_id, message_text, image_urls, page_id)
+            reply = await self._process_openai(sender_id, message_text, image_urls, page_id)
         else:
-            return await self._process_gemini(sender_id, message_text, image_urls, page_id)
+            reply = await self._process_gemini(sender_id, message_text, image_urls, page_id)
+
+        total_ms = (time.perf_counter() - request_start) * 1000
+
+        # Truncate reply for logging
+        reply_preview = (reply[:200] + "…") if len(reply) > 200 else reply
+        logger.info(
+            f"[{sender_id}] ━━━ REPLY ({total_ms:.0f}ms) ━━━ \"{reply_preview}\""
+        )
+
+        return reply
 
     # ─────────────────────────────────────────────────────────────────────
     #  Gemini path (unchanged logic)
@@ -111,11 +143,12 @@ class AgentService:
         from google.genai import types
 
         if not self.gemini_client:
-            print("Agent service not initialized!")
+            logger.error(f"[{sender_id}] Gemini client not initialized!")
             return "Server is currently unavailable."
 
         # 1. Load History (as Gemini Content objects)
         history = memory_service.get_gemini_history(sender_id)
+        logger.debug(f"[{sender_id}] Loaded {len(history)} history entries")
 
         # 2. Append User Message
         parts = []
@@ -150,10 +183,10 @@ class AgentService:
 
                     # Use the Cloud URI so your server's context memory RAM stays tiny!
                     parts.append(types.Part.from_uri(uri=uploaded_file.uri, mime_type="image/jpeg"))
-                    print(f"[AgentService] Successfully uploaded image to Gemini Cloud: {uploaded_file.uri}")
+                    logger.info(f"[{sender_id}] 📷 Uploaded image to Gemini Cloud: {uploaded_file.uri}")
 
                 except Exception as e:
-                    print(f"Failed to upload image to agent context: {e}")
+                    logger.error(f"[{sender_id}] Failed to upload image: {e}")
                     parts.append(types.Part.from_text(text="[User attached an image but the system failed to download it]"))
 
         if not parts:
@@ -174,7 +207,8 @@ class AgentService:
 
         # 4. Agent Execution Loop
         MAX_TURNS = 5
-        for _ in range(MAX_TURNS):
+        for turn in range(MAX_TURNS):
+            logger.debug(f"[{sender_id}] Gemini agent loop — turn {turn + 1}/{MAX_TURNS}")
             try:
                 response = await self.gemini_client.aio.models.generate_content(
                     model="gemini-3-flash-preview",
@@ -182,14 +216,19 @@ class AgentService:
                     config=config
                 )
             except Exception as e:
-                print(f"[Agent] Generation failed: {e}")
+                logger.error(f"[{sender_id}] Gemini generation failed: {e}", exc_info=True)
                 err_reply = "I ran into a server error processing your request."
                 memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=err_reply)]))
                 return err_reply
 
             if hasattr(response, "usage_metadata") and response.usage_metadata:
                 usage = response.usage_metadata
-                print(f"[Agent Token Usage] Prompt: {usage.prompt_token_count or 0} | Output: {usage.candidates_token_count or 0} | Total: {usage.total_token_count or 0}")
+                logger.info(
+                    f"[{sender_id}] 📊 TOKENS (Gemini, turn {turn + 1}): "
+                    f"prompt={usage.prompt_token_count or 0} | "
+                    f"output={usage.candidates_token_count or 0} | "
+                    f"total={usage.total_token_count or 0}"
+                )
 
             if not response.candidates:
                 err_reply = "I'm not sure how to respond to that."
@@ -215,6 +254,8 @@ class AgentService:
                 final_text = "\n".join(text_parts)
                 return final_text
 
+            logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_calls)} tool(s): {[c.name for c in tool_calls]}")
+
             # Execute tools
             tool_responses = []
             for call in tool_calls:
@@ -230,6 +271,7 @@ class AgentService:
             history.append(tool_content)
 
         # If it reached here, it exceeded the loop limit
+        logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS})")
         reply = "I had too much to process. Let's start over."
         memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=reply)]))
         return reply
@@ -242,21 +284,35 @@ class AgentService:
         from app.core.openai_tools import OPENAI_TOOLS
 
         if not self.openai_client:
-            print("Agent service not initialized!")
+            logger.error(f"[{sender_id}] OpenAI client not initialized!")
             return "Server is currently unavailable."
 
         # 1. Load History (as OpenAI message dicts)
         messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
         messages.extend(memory_service.get_openai_history(sender_id))
+        logger.debug(f"[{sender_id}] Loaded {len(messages) - 1} history entries (excl. system)")
 
         # 2. Build user message
         if image_urls:
-            # Multimodal message with images
+            # Multimodal message with images — download and base64-encode because
+            # Facebook CDN URLs are temporary/restricted and OpenAI can't fetch them.
+            import base64
             content_parts = []
             if message_text:
                 content_parts.append({"type": "text", "text": message_text})
             for url in image_urls:
-                content_parts.append({"type": "image_url", "image_url": {"url": url}})
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as http_client:
+                        img_resp = await http_client.get(url)
+                        img_resp.raise_for_status()
+                        image_bytes = img_resp.content
+                    b64 = base64.b64encode(image_bytes).decode("utf-8")
+                    data_uri = f"data:image/jpeg;base64,{b64}"
+                    content_parts.append({"type": "image_url", "image_url": {"url": data_uri}})
+                    logger.info(f"[{sender_id}] 📷 Downloaded image for OpenAI ({len(image_bytes)} bytes)")
+                except Exception as e:
+                    logger.error(f"[{sender_id}] Failed to download image for OpenAI: {e}")
+                    content_parts.append({"type": "text", "text": "[User sent an image but the system failed to download it]"})
             user_msg = {"role": "user", "content": content_parts}
         elif message_text:
             user_msg = {"role": "user", "content": message_text}
@@ -272,7 +328,8 @@ class AgentService:
 
         # 3. Agent Execution Loop
         MAX_TURNS = 5
-        for _ in range(MAX_TURNS):
+        for turn in range(MAX_TURNS):
+            logger.debug(f"[{sender_id}] OpenAI agent loop — turn {turn + 1}/{MAX_TURNS}")
             try:
                 response = await self.openai_client.chat.completions.create(
                     model="gpt-4o-mini",
@@ -282,7 +339,7 @@ class AgentService:
                     temperature=0.7,
                 )
             except Exception as e:
-                print(f"[Agent] OpenAI generation failed: {e}")
+                logger.error(f"[{sender_id}] OpenAI generation failed: {e}", exc_info=True)
                 err_reply = "I ran into a server error processing your request."
                 memory_service.append_content(sender_id, {
                     "role": "model",
@@ -292,7 +349,12 @@ class AgentService:
 
             if hasattr(response, "usage") and response.usage:
                 usage = response.usage
-                print(f"[Agent Token Usage] Prompt: {usage.prompt_tokens} | Output: {usage.completion_tokens} | Total: {usage.total_tokens}")
+                logger.info(
+                    f"[{sender_id}] 📊 TOKENS (OpenAI, turn {turn + 1}): "
+                    f"prompt={usage.prompt_tokens} | "
+                    f"output={usage.completion_tokens} | "
+                    f"total={usage.total_tokens}"
+                )
 
             choice = response.choices[0]
             assistant_msg = choice.message
@@ -333,6 +395,9 @@ class AgentService:
             if not assistant_msg.tool_calls:
                 return assistant_msg.content or "I'm having trouble thinking."
 
+            tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
+            logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_names)} tool(s): {tool_names}")
+
             # Execute tools
             for tc in assistant_msg.tool_calls:
                 args = json.loads(tc.function.arguments) if tc.function.arguments else {}
@@ -357,6 +422,7 @@ class AgentService:
                 })
 
         # Exceeded loop limit
+        logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS})")
         reply = "I had too much to process. Let's start over."
         memory_service.append_content(sender_id, {
             "role": "model",

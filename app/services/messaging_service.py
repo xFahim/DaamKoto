@@ -2,6 +2,10 @@
 
 import httpx
 from app.core.config import settings
+from app.core.logging_config import get_logger
+from app.services.reply_context import store_mid
+
+logger = get_logger(__name__)
 
 GRAPH_API_URL = "https://graph.facebook.com/v18.0/me/messages"
 
@@ -28,7 +32,7 @@ class MessagingService:
                 await client.post(GRAPH_API_URL, params=params, json=payload)
         except Exception as e:
             # Non-critical — don't fail the whole flow for a typing indicator
-            print(f"Failed to send typing indicator: {e}")
+            logger.debug(f"Failed to send typing indicator: {e}")
 
     @staticmethod
     async def send_message(recipient_id: str, message_text: str) -> bool:
@@ -52,16 +56,21 @@ class MessagingService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(GRAPH_API_URL, params=params, json=payload)
                 if response.status_code == 200:
-                    print(f"Message sent successfully to {recipient_id}")
+                    # Store bot reply mid → text for reply-to resolution
+                    resp_data = response.json()
+                    bot_mid = resp_data.get("message_id")
+                    if bot_mid:
+                        store_mid(bot_mid, message_text)
+                    logger.debug(f"Message delivered to {recipient_id}")
                     return True
                 else:
-                    print(
-                        f"Failed to send message. Status: {response.status_code}, "
-                        f"Response: {response.text}"
+                    logger.error(
+                        f"Failed to send message to {recipient_id}. "
+                        f"Status: {response.status_code}, Response: {response.text}"
                     )
                     return False
         except Exception as e:
-            print(f"Error sending message: {str(e)}")
+            logger.error(f"Error sending message to {recipient_id}: {e}")
             return False
 
     @staticmethod
@@ -87,13 +96,13 @@ class MessagingService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(GRAPH_API_URL, params=params, json=payload)
                 if response.status_code == 200:
-                    print(f"Image sent successfully to {recipient_id}")
+                    logger.debug(f"Image delivered to {recipient_id}")
                     return True
                 else:
-                    print(f"Failed to send image. Status: {response.status_code}, Response: {response.text}")
+                    logger.error(f"Failed to send image to {recipient_id}. Status: {response.status_code}, Response: {response.text}")
                     return False
         except Exception as e:
-            print(f"Error sending image: {str(e)}")
+            logger.error(f"Error sending image to {recipient_id}: {e}")
             return False
 
 

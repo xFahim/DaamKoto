@@ -4,8 +4,11 @@ import asyncio
 from fastapi import APIRouter, Query, Request, HTTPException, status
 from fastapi.responses import PlainTextResponse
 from app.core.config import settings
+from app.core.logging_config import get_logger
 from app.services.facebook_service import facebook_service
 from app.schemas.facebook import FacebookWebhookPayload
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -76,9 +79,7 @@ async def _process_webhook_safe(payload: FacebookWebhookPayload) -> None:
     try:
         await facebook_service.process_webhook_event(payload)
     except Exception as e:
-        print(f"Background webhook processing failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Background webhook processing failed: {e}", exc_info=True)
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
@@ -87,4 +88,4 @@ def _log_task_exception(task: asyncio.Task) -> None:
         return
     exc = task.exception()
     if exc:
-        print(f"Unhandled error in background task: {exc}")
+        logger.error(f"Unhandled error in background task: {exc}", exc_info=True)

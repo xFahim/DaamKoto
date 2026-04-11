@@ -16,12 +16,19 @@ class Recipient(BaseModel):
     id: str
 
 
+class ReplyTo(BaseModel):
+    """Reference to the message being replied to."""
+
+    mid: str
+
+
 class Message(BaseModel):
     """Message content in a messaging event."""
 
     mid: Optional[str] = None
     text: Optional[str] = None
     attachments: Optional[list[dict[str, Any]]] = None
+    reply_to: Optional[ReplyTo] = None
 
 
 class MessagingItem(BaseModel):

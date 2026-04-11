@@ -1,8 +1,11 @@
 """Handler for processing image messages from Facebook Messenger."""
 
 from typing import Any
+from app.core.logging_config import get_logger
 from app.services.messaging_service import messaging_service
 from app.services.agent_service import agent_service
+
+logger = get_logger(__name__)
 
 
 class ImageHandler:
@@ -42,7 +45,7 @@ class ImageHandler:
                 message_text=reply,
             )
         except Exception as e:
-            print(f"Error processing image: {str(e)}")
+            logger.error(f"[{sender_id}] Error processing image: {e}", exc_info=True)
             await messaging_service.send_message(
                 recipient_id=sender_id,
                 message_text=(

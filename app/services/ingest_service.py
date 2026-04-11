@@ -9,6 +9,9 @@ import os
 import json
 from google.oauth2 import service_account
 from app.core.config import settings
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Initialize Vertex AI
 try:
@@ -22,7 +25,7 @@ try:
             credentials=credentials
         )
 except Exception as e:
-    print(f"Vertex AI Auth failed in IngestService: {e}")
+    logger.error(f"Vertex AI auth failed in IngestService: {e}")
 
 # Initialize Pinecone
 pc = Pinecone(api_key=settings.pinecone_api_key)
@@ -38,7 +41,7 @@ class IngestService:
         try:
             self.model = MultiModalEmbeddingModel.from_pretrained("multimodalembedding")
         except Exception as e:
-            print(f"Failed to load MultiModalEmbeddingModel in IngestService: {e}")
+            logger.error(f"Failed to load MultiModalEmbeddingModel in IngestService: {e}")
             self.model = None
 
     async def process_and_upload(self, page_id: str, products: list) -> dict[str, Any]:
@@ -94,7 +97,7 @@ class IngestService:
                 )
                 embedding_values = embeddings.text_embedding
             except Exception as e:
-                print(f"Error embedding product {name}: {e}")
+                logger.error(f"Error embedding product {name}: {e}")
                 continue
 
             # Create vector record

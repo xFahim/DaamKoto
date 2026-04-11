@@ -1,8 +1,11 @@
 """Service layer for Facebook Messenger webhook processing."""
 
 from app.core.config import settings
+from app.core.logging_config import get_logger
 from app.schemas.facebook import FacebookWebhookPayload
 from app.services.handlers.message_router import message_router
+
+logger = get_logger(__name__)
 
 
 class FacebookService:
@@ -25,7 +28,9 @@ class FacebookService:
             The challenge string if verification succeeds, None otherwise
         """
         if mode == "subscribe" and token == verify_token:
+            logger.info("Webhook verification succeeded")
             return challenge
+        logger.warning("Webhook verification failed")
         return None
 
     @staticmethod
@@ -38,36 +43,27 @@ class FacebookService:
         Args:
             payload: The validated Facebook webhook payload
         """
-        print("=" * 50)
-        print("Facebook Webhook Event Received")
-        print("=" * 50)
-        print(f"Object: {payload.object}")
-        print(f"Number of entries: {len(payload.entry)}")
-        print()
+        logger.info(f"Webhook event received — object={payload.object}, entries={len(payload.entry)}")
 
         for entry in payload.entry:
             # TODO: Map Facebook page ID to internal store name for production
             # For now, hardcode to "goodybro" for testing
             page_id = "goodybro"  # entry.id
 
-            print(f"Entry ID: {entry.id}")
-            print(f"Entry Time: {entry.time}")
-            print(f"Number of messaging events: {len(entry.messaging)}")
-            print()
-
             for messaging in entry.messaging:
                 sender_id = messaging.sender.id
-                print(f"  Sender ID: {sender_id}")
-                print(f"  Recipient ID: {messaging.recipient.id}")
-                print(f"  Timestamp: {messaging.timestamp}")
 
                 # Process message events
                 if messaging.message:
                     message_dict = messaging.message.model_dump()
-                    print(f"  Message ID: {message_dict.get('mid')}")
-                    print(f"  Message Text: {message_dict.get('text')}")
-                    if message_dict.get("attachments"):
-                        print(f"  Attachments: {len(message_dict['attachments'])}")
+                    text = message_dict.get('text', '')
+                    att_count = len(message_dict.get('attachments') or [])
+                    logger.info(
+                        f"[{sender_id}] 📨 Webhook message — "
+                        f"mid={message_dict.get('mid')} | "
+                        f"text=\"{text[:80]}{'…' if len(text or '') > 80 else ''}\" | "
+                        f"attachments={att_count}"
+                    )
 
                     # Route message to appropriate handler (text or image)
                     await message_router.route_message(
@@ -76,20 +72,15 @@ class FacebookService:
                         page_id=page_id,
                     )
 
-                # Log other event types
+                # Log other event types at debug level
                 if messaging.postback:
-                    print(f"  Postback: {messaging.postback}")
+                    logger.debug(f"[{sender_id}] Postback: {messaging.postback}")
 
                 if messaging.delivery:
-                    print(f"  Delivery: {messaging.delivery}")
+                    logger.debug(f"[{sender_id}] Delivery receipt")
 
                 if messaging.read:
-                    print(f"  Read: {messaging.read}")
-
-                print()
-
-        print("=" * 50)
-        print()
+                    logger.debug(f"[{sender_id}] Read receipt")
 
 
 facebook_service = FacebookService()

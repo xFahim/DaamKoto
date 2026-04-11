@@ -1,5 +1,9 @@
 """Tools module for Gemini agentic workflows."""
 
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 def search_products(query: str) -> list[dict]:
     """Search the product catalog for availability, price, colors, or sizes.
 
@@ -9,7 +13,7 @@ def search_products(query: str) -> list[dict]:
     Returns:
         List of matching products.
     """
-    print(f"[TOOL EXECUTION] search_products called with query: {query}")
+    logger.debug(f"search_products called with query: {query}")
     # Dummy mock response, we will wire this to RAG later
     return [
         {"product_id": "P101", "name": "Red Classic T-Shirt", "price": 500, "sizes": ["M", "L", "XL"], "in_stock": True, "image_url": "https://dummyimage.com/400x400/ff0000/ffffff.png&text=Red+T-Shirt"},
@@ -25,7 +29,7 @@ def get_company_policy(topic: str) -> str:
     Returns:
         A string documenting the policy.
     """
-    print(f"[TOOL EXECUTION] get_company_policy called with topic: {topic}")
+    logger.debug(f"get_company_policy called with topic: {topic}")
     topic_lower = topic.lower()
     if "hour" in topic_lower or "time" in topic_lower:
         return "We are open from 10:00 AM to 10:00 PM everyday."
@@ -47,7 +51,7 @@ def execute_order(item_names: str, sizes: str, delivery_address: str, contact_nu
     Returns:
         A dictionary containing the order status and order ID.
     """
-    print(f"[TOOL EXECUTION] execute_order called: items={item_names}, sizes={sizes}, address={delivery_address}, phone={contact_number}")
+    logger.debug(f"execute_order called: items={item_names}, sizes={sizes}, address={delivery_address}, phone={contact_number}")
     # Mocking a DB insert
     return {
         "status": "success",
@@ -64,5 +68,5 @@ def send_product_image(image_url: str) -> dict:
     Returns:
         Status indicating if the image was successfully dispatched.
     """
-    print(f"[TOOL EXECUTION] send_product_image called with url: {image_url}")
+    logger.debug(f"send_product_image called with url: {image_url}")
     return {"status": "Image successfully dispatched to the user interface."}

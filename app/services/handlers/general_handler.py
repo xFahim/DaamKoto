@@ -3,6 +3,9 @@
 from google import genai
 from google.genai import types
 from app.core.config import settings
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Shared client instance
 client = genai.Client(api_key=settings.gemini_api_key)
@@ -43,7 +46,7 @@ class GeneralHandler:
             )
             reply = response.text.strip()
         except Exception as e:
-            print(f"General handler error: {e}")
+            logger.error(f"General handler error: {e}")
             reply = "Hey there! How can I help you today?"
 
         return reply

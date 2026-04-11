@@ -2,8 +2,11 @@
 
 import asyncio
 from app.core.config import settings
+from app.core.logging_config import get_logger
 from app.services.messaging_service import messaging_service
 from app.services.handlers.text_handler import text_handler
+
+logger = get_logger(__name__)
 
 
 class MessageBatcher:
@@ -23,6 +26,12 @@ class MessageBatcher:
             self._pending_items[sender_id]["texts"].append(text)
         if image_url:
             self._pending_items[sender_id]["image_urls"].append(image_url)
+
+        batch = self._pending_items[sender_id]
+        logger.debug(
+            f"[{sender_id}] Batch updated — {len(batch['texts'])} text(s), "
+            f"{len(batch['image_urls'])} image(s) | debounce={settings.message_batch_timeout}s"
+        )
 
         # Reset timer BEFORE any awaits so slow Meta API calls can't hijack the timer
         existing = self._timers.get(sender_id)
@@ -53,6 +62,11 @@ class MessageBatcher:
 
         combined_text = "\n".join(batch["texts"]) if batch["texts"] else ""
         
+        logger.info(
+            f"[{sender_id}] 📦 Batch flushed — {len(batch['texts'])} text(s), "
+            f"{len(batch['image_urls'])} image(s)"
+        )
+
         try:
             await asyncio.wait_for(
                 text_handler.process(
@@ -64,9 +78,9 @@ class MessageBatcher:
                 timeout=60.0,
             )
         except asyncio.TimeoutError:
-            print(f"[MessageBatcher] Batch processing timed out for {sender_id}")
+            logger.error(f"[{sender_id}] Batch processing timed out after 60s")
         except Exception as e:
-            print(f"[MessageBatcher] Error processing batch for {sender_id}: {e}")
+            logger.error(f"[{sender_id}] Batch processing error: {e}", exc_info=True)
 
     async def shutdown(self) -> None:
         """Cancel all pending timers. Called during app shutdown."""
