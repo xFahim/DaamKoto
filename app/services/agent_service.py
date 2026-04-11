@@ -161,16 +161,18 @@ class AgentService:
         request_start = time.perf_counter()
 
         if self.provider == "openai":
-            reply = await self._process_openai(sender_id, message_text, image_urls, page_id)
+            reply, tokens = await self._process_openai(sender_id, message_text, image_urls, page_id)
         else:
-            reply = await self._process_gemini(sender_id, message_text, image_urls, page_id)
+            reply, tokens = await self._process_gemini(sender_id, message_text, image_urls, page_id)
 
         total_ms = (time.perf_counter() - request_start) * 1000
 
         # Truncate reply for logging
         reply_preview = (reply[:200] + "…") if len(reply) > 200 else reply
         logger.info(
-            f"[{sender_id}] ━━━ REPLY ({total_ms:.0f}ms) ━━━ \"{reply_preview}\""
+            f"[{sender_id}] ━━━ REPLY ({total_ms:.0f}ms) ━━━ "
+            f"tokens={{in={tokens['prompt']}, out={tokens['completion']}, total={tokens['total']}, turns={tokens['turns']}}} | "
+            f"\"{reply_preview}\""
         )
 
         return reply
@@ -179,13 +181,15 @@ class AgentService:
     #  Gemini path (unchanged logic)
     # ─────────────────────────────────────────────────────────────────────
 
-    async def _process_gemini(self, sender_id: str, message_text: str, image_urls: list[str] | None, page_id: str) -> str:
+    async def _process_gemini(self, sender_id: str, message_text: str, image_urls: list[str] | None, page_id: str) -> tuple[str, dict]:
         from google import genai
         from google.genai import types
 
+        _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0}
+
         if not self.gemini_client:
             logger.error(f"[{sender_id}] Gemini client not initialized!")
-            return "Server is currently unavailable."
+            return "Server is currently unavailable.", _zero_tokens
 
         # 1. Load History (as Gemini Content objects)
         history = memory_service.get_gemini_history(sender_id)
@@ -248,6 +252,10 @@ class AgentService:
 
         # 4. Agent Execution Loop
         MAX_TURNS = 5
+        total_prompt = 0
+        total_completion = 0
+        turns_used = 0
+
         for turn in range(MAX_TURNS):
             logger.debug(f"[{sender_id}] Gemini agent loop — turn {turn + 1}/{MAX_TURNS}")
             try:
@@ -260,27 +268,27 @@ class AgentService:
                 logger.error(f"[{sender_id}] Gemini generation failed: {e}", exc_info=True)
                 err_reply = "I ran into a server error processing your request."
                 memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=err_reply)]))
-                return err_reply
+                return err_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+
+            turns_used += 1
 
             if hasattr(response, "usage_metadata") and response.usage_metadata:
                 usage = response.usage_metadata
-                logger.info(
-                    f"[{sender_id}] 📊 TOKENS (Gemini, turn {turn + 1}): "
-                    f"prompt={usage.prompt_token_count or 0} | "
-                    f"output={usage.candidates_token_count or 0} | "
-                    f"total={usage.total_token_count or 0}"
-                )
+                p = usage.prompt_token_count or 0
+                c = usage.candidates_token_count or 0
+                total_prompt += p
+                total_completion += c
 
             if not response.candidates:
                 err_reply = "I'm not sure how to respond to that."
                 memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=err_reply)]))
-                return err_reply
+                return err_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             candidate = response.candidates[0]
             if not candidate.content or not candidate.content.parts:
                 err_reply = "I'm having trouble thinking."
                 memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=err_reply)]))
-                return err_reply
+                return err_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             # Copy content to avoid modifying references and append to history & memory cache
             memory_service.append_content(sender_id, candidate.content)
@@ -293,7 +301,7 @@ class AgentService:
                 # Text response generated, break loop and return the text
                 text_parts = [p.text for p in candidate.content.parts if p.text]
                 final_text = "\n".join(text_parts)
-                return final_text
+                return final_text, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_calls)} tool(s): {[c.name for c in tool_calls]}")
 
@@ -315,18 +323,20 @@ class AgentService:
         logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS})")
         reply = "I had too much to process. Let's start over."
         memory_service.append_content(sender_id, types.Content(role="model", parts=[types.Part.from_text(text=reply)]))
-        return reply
+        return reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
     # ─────────────────────────────────────────────────────────────────────
     #  OpenAI path (same logic, different SDK)
     # ─────────────────────────────────────────────────────────────────────
 
-    async def _process_openai(self, sender_id: str, message_text: str, image_urls: list[str] | None, page_id: str) -> str:
+    async def _process_openai(self, sender_id: str, message_text: str, image_urls: list[str] | None, page_id: str) -> tuple[str, dict]:
         from app.core.openai_tools import OPENAI_TOOLS
+
+        _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0}
 
         if not self.openai_client:
             logger.error(f"[{sender_id}] OpenAI client not initialized!")
-            return "Server is currently unavailable."
+            return "Server is currently unavailable.", _zero_tokens
 
         # 1. Load History (as OpenAI message dicts)
         messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
@@ -369,6 +379,10 @@ class AgentService:
 
         # 3. Agent Execution Loop
         MAX_TURNS = 5
+        total_prompt = 0
+        total_completion = 0
+        turns_used = 0
+
         for turn in range(MAX_TURNS):
             logger.debug(f"[{sender_id}] OpenAI agent loop — turn {turn + 1}/{MAX_TURNS}")
             try:
@@ -386,16 +400,14 @@ class AgentService:
                     "role": "model",
                     "parts": [{"type": "text", "text": err_reply}],
                 })
-                return err_reply
+                return err_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+
+            turns_used += 1
 
             if hasattr(response, "usage") and response.usage:
                 usage = response.usage
-                logger.info(
-                    f"[{sender_id}] 📊 TOKENS (OpenAI, turn {turn + 1}): "
-                    f"prompt={usage.prompt_tokens} | "
-                    f"output={usage.completion_tokens} | "
-                    f"total={usage.total_tokens}"
-                )
+                total_prompt += usage.prompt_tokens or 0
+                total_completion += usage.completion_tokens or 0
 
             choice = response.choices[0]
             assistant_msg = choice.message
@@ -406,7 +418,7 @@ class AgentService:
                     "role": "model",
                     "parts": [{"type": "text", "text": err_reply}],
                 })
-                return err_reply
+                return err_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             # Save assistant message to history
             assistant_dict = assistant_msg.model_dump(exclude_none=True)
@@ -434,7 +446,8 @@ class AgentService:
 
             # Check for tool calls
             if not assistant_msg.tool_calls:
-                return assistant_msg.content or "I'm having trouble thinking."
+                final = assistant_msg.content or "I'm having trouble thinking."
+                return final, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
             logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_names)} tool(s): {tool_names}")
@@ -469,7 +482,7 @@ class AgentService:
             "role": "model",
             "parts": [{"type": "text", "text": reply}],
         })
-        return reply
+        return reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
     @staticmethod
     def _openai_msg_to_parts(msg: dict) -> list[dict]:
