@@ -184,6 +184,35 @@ class MemoryService:
 
         _cache[sender_id] = history
 
+    def replace_with_summary(self, sender_id: str, keep_last_n: int, summary_text: str) -> None:
+        """Replace older messages with a summary string to save tokens."""
+        history = list(_cache.get(sender_id, []))
+        if len(history) <= keep_last_n:
+            return
+            
+        # Keep the last n messages
+        recent = history[-keep_last_n:]
+        
+        # Ensure the first message in the recent list is a 'user' message
+        while recent and recent[0].get("role") != "user":
+            recent.pop(0)
+            
+        while recent and any(
+            p.get("type") == "function_response" for p in recent[0].get("parts", [])
+        ):
+            recent.pop(0)
+            while recent and recent[0].get("role") != "user":
+                recent.pop(0)
+
+        # Create summary message
+        summary_msg = {
+            "role": "user",
+            "parts": [{"type": "text", "text": f"[System Context Summary: {summary_text}]"}]
+        }
+        
+        # New history is: Summary -> Recent N messages
+        _cache[sender_id] = [summary_msg] + recent
+
     def clear_history(self, sender_id: str) -> None:
         """Manually wipe history if needed (e.g., after order completion)."""
         if sender_id in _cache:

@@ -109,6 +109,14 @@ class AgentService:
             if call_name == "search_products":
                 from app.services.rag_service import rag_service
                 products = await rag_service.search_catalog(query=call_args.get("query", ""), page_id=page_id)
+                
+                # Truncate tool response to save prompt tokens
+                if products:
+                    for p in products:
+                        p.pop("score", None)  # The agent doesn't need vector similarity scores
+                        if "description" in p and isinstance(p["description"], str):
+                            p["description"] = p["description"][:100] + ("..." if len(p["description"]) > 100 else "")
+                            
                 result = {"products_found": products} if products else {"message": "No relevant products found in the catalog."}
             elif call_name == "get_company_policy":
                 result = get_company_policy(**call_args)
@@ -175,7 +183,67 @@ class AgentService:
             f"\"{reply_preview}\""
         )
 
+        import asyncio
+        if len(memory_service.get_history(sender_id)) > 15:
+            asyncio.create_task(self._summarize_history_task(sender_id))
+
         return reply
+
+    async def _summarize_history_task(self, sender_id: str):
+        """Background task to summarize older history to save tokens."""
+        history = memory_service.get_history(sender_id)
+        if len(history) <= 15:
+            return
+            
+        logger.info(f"[{sender_id}] Triggering background history summarization...")
+        
+        # We'll take everything except the last 8 messages to summarize
+        keep_last_n = 8
+        to_summarize = history[:-keep_last_n]
+        
+        # Create a tiny prompt to summarize
+        prompt = "Summarize this conversation concisely. Focus on user intent, missing information, and products discussed. Maximum 3 sentences."
+        
+        # Build text representation of older conversation
+        text_convo = ""
+        for msg in to_summarize:
+            role = msg.get("role", "unknown")
+            parts = msg.get("parts", [])
+            for p in parts:
+                if p.get("type") == "text" and p.get("text"):
+                    text_convo += f"{role}: {p['text']}\n"
+        
+        if not text_convo.strip():
+            return
+
+        try:
+            summary = ""
+            if self.provider == "openai" and self.openai_client:
+                messages = [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": text_convo}
+                ]
+                resp = await self.openai_client.chat.completions.create(
+                    model="gpt-5-mini",  # Use fast low-cost model
+                    messages=messages,
+                    temperature=0.3,
+                )
+                if resp.choices and resp.choices[0].message.content:
+                    summary = resp.choices[0].message.content
+            elif self.provider == "gemini" and self.gemini_client:
+                from google.genai import types
+                resp = await self.gemini_client.aio.models.generate_content(
+                    model="gemini-3-flash-preview",
+                    contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt + "\n\n" + text_convo)])],
+                )
+                if resp.candidates and resp.candidates[0].content.parts:
+                    summary = "\n".join([p.text for p in resp.candidates[0].content.parts if p.text])
+            
+            if summary:
+                logger.info(f"[{sender_id}] Replaced history with summary: {summary}")
+                memory_service.replace_with_summary(sender_id, keep_last_n, summary)
+        except Exception as e:
+            logger.error(f"[{sender_id}] Summarization failed: {e}", exc_info=True)
 
     # ─────────────────────────────────────────────────────────────────────
     #  Gemini path (unchanged logic)
