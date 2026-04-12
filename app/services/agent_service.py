@@ -89,7 +89,7 @@ class AgentService:
             if not settings.openai_api_key:
                 raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
             self.openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
-            logger.info("Agent service initialized — OpenAI (gpt-4o-mini)")
+            logger.info("Agent service initialized — OpenAI (gpt-5-mini)")
         else:
             from google import genai
             self.gemini_client = genai.Client(api_key=settings.gemini_api_key)
@@ -387,7 +387,7 @@ class AgentService:
             logger.debug(f"[{sender_id}] OpenAI agent loop — turn {turn + 1}/{MAX_TURNS}")
             try:
                 response = await self.openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="gpt-5-mini",
                     messages=messages,
                     tools=OPENAI_TOOLS,
                     tool_choice="auto",
