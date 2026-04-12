@@ -226,7 +226,6 @@ class AgentService:
                 resp = await self.openai_client.chat.completions.create(
                     model="gpt-5-mini",  # Use fast low-cost model
                     messages=messages,
-                    temperature=0.3,
                 )
                 if resp.choices and resp.choices[0].message.content:
                     summary = resp.choices[0].message.content
@@ -459,7 +458,6 @@ class AgentService:
                     messages=messages,
                     tools=OPENAI_TOOLS,
                     tool_choice="auto",
-                    temperature=0.7,
                 )
             except Exception as e:
                 logger.error(f"[{sender_id}] OpenAI generation failed: {e}", exc_info=True)
