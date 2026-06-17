@@ -2,6 +2,7 @@
 
 from typing import Any
 from app.core.logging_config import get_logger
+from app.core.tenant_context import TenantContext
 from app.services.batching_service import message_batcher
 from app.services.handlers.image_handler import image_handler
 from app.services.messaging_service import messaging_service
@@ -19,7 +20,7 @@ class MessageRouter:
     async def route_message(
         sender_id: str,
         message: dict[str, Any] | None,
-        page_id: str,
+        tenant: TenantContext,
     ) -> None:
         """
         Categorize a message and route it to the appropriate handler.
@@ -27,7 +28,7 @@ class MessageRouter:
         Args:
             sender_id: The Facebook user ID who sent the message
             message: The message object from Facebook webhook
-            page_id: The Facebook page ID
+            tenant: The resolved tenant context for this request
         """
         if not message:
             return
@@ -65,7 +66,7 @@ class MessageRouter:
                 await message_batcher.add_message(
                     sender_id=sender_id,
                     text=enriched_text,
-                    page_id=page_id,
+                    tenant=tenant,
                 )
                 handled = True
             elif status == "reject":
@@ -78,6 +79,7 @@ class MessageRouter:
                             f"Please keep your message under {settings.max_message_length} characters "
                             "so I can understand you better!"
                         ),
+                        access_token=tenant.page_access_token,
                     )
                 elif payload == "rate_limited":
                     logger.warning(f"[{sender_id}] 🚫 Rejected: rate limited")
@@ -87,6 +89,7 @@ class MessageRouter:
                             "You're sending messages too fast! "
                             "Take a moment and try again."
                         ),
+                        access_token=tenant.page_access_token,
                     )
             elif status == "silent_drop":
                 logger.debug(f"[{sender_id}] Silent drop — empty/stripped message")
@@ -95,11 +98,6 @@ class MessageRouter:
         # Check if message has image attachments
         attachments = message.get("attachments")
         if attachments:
-            # We import here locally to avoid circular dependencies if any
-            from app.services.handlers.image_handler import ImageHandler
-            has_image = False
-            
-            # The attachment parsing logic was slightly flawed, we iterate to see if ANY attachment is an image
             for att in attachments:
                 if isinstance(att, dict) and att.get("type") == "image":
                     url = att.get("payload", {}).get("url")
@@ -107,7 +105,7 @@ class MessageRouter:
                         logger.info(f"[{sender_id}] 📷 IMAGE received — {url[:80]}…")
                         await message_batcher.add_message(
                             sender_id=sender_id,
-                            page_id=page_id,
+                            tenant=tenant,
                             image_url=url
                         )
                         handled = True
@@ -115,15 +113,16 @@ class MessageRouter:
         # If message doesn't match any category, send a default response
         if not handled:
             logger.info(f"[{sender_id}] ❓ Unsupported message type — sending fallback")
-            await MessageRouter._send_unsupported_message(sender_id)
+            await MessageRouter._send_unsupported_message(sender_id, tenant)
 
     @staticmethod
-    async def _send_unsupported_message(sender_id: str) -> None:
+    async def _send_unsupported_message(sender_id: str, tenant: TenantContext) -> None:
         """
         Send a message for unsupported message types.
 
         Args:
             sender_id: The Facebook user ID to send the message to
+            tenant: The resolved tenant context
         """
         await messaging_service.send_message(
             recipient_id=sender_id,
@@ -131,8 +130,8 @@ class MessageRouter:
                 "I can help you with text messages or product images! "
                 "Please send me a message or an image of a product you're looking for."
             ),
+            access_token=tenant.page_access_token,
         )
 
 
 message_router = MessageRouter()
-

@@ -3,6 +3,7 @@
 import asyncio
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.core.tenant_context import TenantContext
 from app.services.messaging_service import messaging_service
 from app.services.handlers.text_handler import text_handler
 
@@ -15,7 +16,7 @@ class MessageBatcher:
         self._pending_items: dict[str, dict] = {}
         self._timers: dict[str, asyncio.Task] = {}
 
-    async def add_message(self, sender_id: str, page_id: str, text: str = None, image_url: str = None) -> None:
+    async def add_message(self, sender_id: str, tenant: TenantContext, text: str = None, image_url: str = None) -> None:
         """Append text or image to sender's batch, reset debounce timer."""
         is_first = sender_id not in self._pending_items
         
@@ -39,14 +40,14 @@ class MessageBatcher:
             existing.cancel()
 
         self._timers[sender_id] = asyncio.create_task(
-            self._process_batch(sender_id, page_id)
+            self._process_batch(sender_id, tenant)
         )
 
         # Non-critical — send after timer is locked in; failure doesn't affect batching
         if is_first:
-            await messaging_service.send_typing_on(sender_id)
+            await messaging_service.send_typing_on(sender_id, access_token=tenant.page_access_token)
 
-    async def _process_batch(self, sender_id: str, page_id: str) -> None:
+    async def _process_batch(self, sender_id: str, tenant: TenantContext) -> None:
         """Wait for debounce window, then flush batch to TextHandler."""
         try:
             await asyncio.sleep(settings.message_batch_timeout)
@@ -72,7 +73,7 @@ class MessageBatcher:
                 text_handler.process(
                     sender_id=sender_id,
                     message_text=combined_text,
-                    page_id=page_id,
+                    tenant=tenant,
                     image_urls=batch["image_urls"]
                 ),
                 timeout=60.0,

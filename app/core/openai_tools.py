@@ -2,7 +2,7 @@
 
 These mirror the exact same tools defined in tools.py but expressed as
 JSON schemas that OpenAI's chat completions API expects.
-The actual execution still routes through the Python functions in tools.py.
+The actual execution still routes through AgentService._execute_tool().
 """
 
 OPENAI_TOOLS = [
@@ -27,13 +27,13 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_company_policy",
-            "description": "Retrieve company policy info regarding hours, returns, shipping, etc.",
+            "description": "Retrieve the store's policies about shipping, returns, operating hours, etc.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "topic": {
                         "type": "string",
-                        "description": "The topic requested (e.g. 'operating hours', 'return policy')."
+                        "description": "The topic requested (e.g. 'operating hours', 'return policy', 'shipping')."
                     }
                 },
                 "required": ["topic"]
@@ -44,7 +44,7 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_order",
-            "description": "Process an order and insert it into the database once the user confirms all details.",
+            "description": "Place an order after the user explicitly confirms all details.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -66,6 +66,23 @@ OPENAI_TOOLS = [
                     }
                 },
                 "required": ["item_names", "sizes", "delivery_address", "contact_number"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_order_status",
+            "description": "Check the current status of an existing order by its order number.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_number": {
+                        "type": "string",
+                        "description": "The order number to look up (e.g. 'ORD-A1B2C3D4')."
+                    }
+                },
+                "required": ["order_number"]
             }
         }
     },

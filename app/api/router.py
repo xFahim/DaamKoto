@@ -1,7 +1,7 @@
 """Primary API router that includes all versioned routers."""
 
 from fastapi import APIRouter
-from app.api.v1.endpoints import facebook, ingest
+from app.api.v1.endpoints import facebook, supabase_webhook
 
 api_router = APIRouter()
 
@@ -13,7 +13,7 @@ api_router.include_router(
 )
 
 api_router.include_router(
-    ingest.router,
+    supabase_webhook.router,
     prefix="/v1",
-    tags=["ingestion"],
+    tags=["internal-webhooks"],
 )

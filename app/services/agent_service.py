@@ -1,11 +1,15 @@
 """Multi-turn agentic service supporting Gemini and OpenAI providers."""
 
+import asyncio
 import json
 import time
+import uuid
 import httpx
 from app.core.config import settings
 from app.core.logging_config import get_logger
-from app.core.tools import search_products, get_company_policy, execute_order, send_product_image
+from app.core.tenant_context import TenantContext
+from app.core.tools import search_products, get_company_policy, execute_order, send_product_image, check_order_status
+from app.core.dependencies import get_supabase
 from app.services.memory_service import memory_service
 from app.services.messaging_service import messaging_service
 
@@ -45,13 +49,14 @@ SYSTEM_INSTRUCTION = (
 
     "## PRODUCT LINKS\n"
     "- When mentioning a product, include its product_url as a raw link on its own line (not inside markdown brackets).\n"
-    "- Example: 'Here is the link\\nhttps://goodybro.com/products/...' — Messenger will auto-preview it.\n\n"
+    "- Example: 'Here is the link\\nhttps://store.example.com/products/...' — Messenger will auto-preview it.\n\n"
 
     "## WHEN TO USE TOOLS\n"
     "- 'search_products': When user asks about any product, color, size, price, or says something like 'show me', 'ache?', 'dekhan'.\n"
     "- 'send_product_image': Right after getting search results, send the best match's image. Use the image_url field from results.\n"
     "- 'get_company_policy': When user asks about shipping, return policy, operating hours, delivery time.\n"
-    "- 'execute_order': ONLY after user explicitly confirms the order (see order rules below).\n\n"
+    "- 'execute_order': ONLY after user explicitly confirms the order (see order rules below).\n"
+    "- 'check_order_status': When user asks about an existing order status, tracking, or gives an order number.\n\n"
 
     "## ORDER FLOW\n"
     "When a user wants to buy:\n"
@@ -77,7 +82,7 @@ class AgentService:
         self.gemini_client = None
         self.openai_client = None
         # Provide the actual Python functions. The SDK parses their signatures and docstrings.
-        self.tools = [search_products, get_company_policy, execute_order, send_product_image]
+        self.tools = [search_products, get_company_policy, execute_order, check_order_status, send_product_image]
 
     def initialize(self):
         """Configure the LLM client based on the selected provider."""
@@ -91,24 +96,31 @@ class AgentService:
             self.openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
             logger.info("Agent service initialized — OpenAI (gpt-5-mini)")
         else:
-            from google import genai
-            self.gemini_client = genai.Client(api_key=settings.gemini_api_key)
+            from app.core.dependencies import genai_client
+            self.gemini_client = genai_client
             self.provider = "gemini"
             logger.info("Agent service initialized — Gemini (gemini-3-flash-preview)")
 
-    async def _execute_tool(self, call_name: str, call_args: dict, sender_id: str, page_id: str) -> dict:
-        """Dynamically execute the matched python tool."""
-        logger.info(f"[{sender_id}] 🔧 TOOL CALL: {call_name}({json.dumps(call_args, ensure_ascii=False)})")
+    async def _execute_tool(self, call_name: str, call_args: dict, tenant: TenantContext) -> dict:
+        """Execute a tool with tenant context injected server-side.
+
+        The LLM only provides call_args from its tool schema (no shop_id, no sender_id).
+        Tenant isolation is enforced here by using tenant.shop_id and tenant.sender_id.
+        """
+        logger.info(f"[{tenant.sender_id}] 🔧 TOOL CALL: {call_name}({json.dumps(call_args, ensure_ascii=False)})")
 
         # Send typing to show we're doing stuff
-        await messaging_service.send_typing_on(sender_id)
+        await messaging_service.send_typing_on(tenant.sender_id, access_token=tenant.page_access_token)
 
         tool_start = time.perf_counter()
 
         try:
             if call_name == "search_products":
                 from app.services.rag_service import rag_service
-                products = await rag_service.search_catalog(query=call_args.get("query", ""), page_id=page_id)
+                products = await rag_service.search_catalog(
+                    query=call_args.get("query", ""),
+                    page_id=tenant.shop_id  # shop_id injected, not from LLM
+                )
                 
                 # Truncate tool response to save prompt tokens
                 if products:
@@ -118,17 +130,99 @@ class AgentService:
                             p["description"] = p["description"][:100] + ("..." if len(p["description"]) > 100 else "")
                             
                 result = {"products_found": products} if products else {"message": "No relevant products found in the catalog."}
+
             elif call_name == "get_company_policy":
-                result = get_company_policy(**call_args)
+                # Query bot_settings.store_policies for this tenant
+                try:
+                    db_result = get_supabase().table("bot_settings") \
+                        .select("store_policies") \
+                        .eq("shop_id", tenant.shop_id) \
+                        .maybe_single() \
+                        .execute()
+                    policies = db_result.data.get("store_policies", "") if db_result.data else ""
+                except Exception as db_err:
+                    logger.error(f"[{tenant.sender_id}] Failed to fetch store_policies: {db_err}")
+                    policies = ""
+
+                if policies:
+                    result = {"policies": policies}
+                else:
+                    result = {"message": "No store policies are configured yet. Please tell the customer to contact support directly."}
+
+            elif call_name == "check_order_status":
+                # Query orders table strictly by order_number AND shop_id
+                order_num = call_args.get("order_number", "").strip()
+                if not order_num:
+                    result = {"error": "No order number provided."}
+                else:
+                    try:
+                        db_result = get_supabase().table("orders") \
+                            .select("order_number, status, items, sizes, total_amount, delivery_address, created_at") \
+                            .eq("order_number", order_num) \
+                            .eq("shop_id", tenant.shop_id) \
+                            .maybe_single() \
+                            .execute()
+
+                        if db_result.data:
+                            result = {"order": db_result.data}
+                        else:
+                            result = {"message": f"No order found with number '{order_num}' for this store."}
+                    except Exception as db_err:
+                        logger.error(f"[{tenant.sender_id}] Order lookup failed: {db_err}")
+                        result = {"error": "Failed to look up the order. Please try again."}
+
             elif call_name == "execute_order":
-                result = execute_order(**call_args)
+                try:
+                    # 1. Upsert customer by messenger_psid + shop_id (including profile fields)
+                    customer_data = {
+                        "messenger_psid": tenant.sender_id,
+                        "shop_id": tenant.shop_id,
+                        "phone": call_args.get("contact_number", ""),
+                        "address": call_args.get("delivery_address", ""),
+                        "contact_number": call_args.get("contact_number", ""),
+                        "last_delivery_address": call_args.get("delivery_address", ""),
+                    }
+                    sizes = call_args.get("sizes", "")
+                    if sizes:
+                        customer_data["preferred_sizes"] = sizes
+                    get_supabase().table("customers").upsert(
+                        customer_data, on_conflict="messenger_psid,shop_id"
+                    ).execute()
+
+                    # 2. Generate order number & insert order
+                    order_number = f"ORD-{uuid.uuid4().hex[:8].upper()}"
+                    get_supabase().table("orders").insert({
+                        "order_number": order_number,
+                        "shop_id": tenant.shop_id,
+                        "customer_psid": tenant.sender_id,
+                        "items": call_args.get("item_names", ""),
+                        "sizes": call_args.get("sizes", ""),
+                        "delivery_address": call_args.get("delivery_address", ""),
+                        "contact_number": call_args.get("contact_number", ""),
+                        "status": "processing",
+                    }).execute()
+
+                    result = {
+                        "status": "success",
+                        "order_number": order_number,
+                        "message": f"Order {order_number} placed successfully for {call_args.get('item_names', 'items')}."
+                    }
+                    logger.info(f"[{tenant.sender_id}] 📋 Order created: {order_number} (shop={tenant.shop_id})")
+
+                except Exception as db_err:
+                    logger.error(f"[{tenant.sender_id}] Order creation failed: {db_err}", exc_info=True)
+                    result = {"status": "failed", "error": "Failed to place the order. Please try again."}
+
             elif call_name == "send_product_image":
                 url = call_args.get("image_url", "")
                 if not url or url.lower() in ["none", "null", "undefined"]:
-                    logger.warning(f"[{sender_id}] send_product_image called with invalid URL: '{url}'")
+                    logger.warning(f"[{tenant.sender_id}] send_product_image called with invalid URL: '{url}'")
                     result = {"status": "Failed: You must provide a valid image_url string."}
                 else:
-                    success = await messaging_service.send_image(sender_id, url)
+                    success = await messaging_service.send_image(
+                        tenant.sender_id, url,
+                        access_token=tenant.page_access_token
+                    )
                     if success:
                         result = {"status": "Image successfully dispatched to the user interface."}
                     else:
@@ -136,7 +230,7 @@ class AgentService:
             else:
                 result = {"error": f"Unknown tool: {call_name}"}
         except Exception as e:
-            logger.error(f"[{sender_id}] Tool {call_name} raised exception: {e}", exc_info=True)
+            logger.error(f"[{tenant.sender_id}] Tool {call_name} raised exception: {e}", exc_info=True)
             result = {"error": str(e)}
 
         # Ensure result is always a dict
@@ -148,7 +242,7 @@ class AgentService:
         result_preview = json.dumps(result, ensure_ascii=False)
         if len(result_preview) > 300:
             result_preview = result_preview[:300] + "…"
-        logger.info(f"[{sender_id}] 🔧 TOOL RESULT ({call_name}, {elapsed_ms:.0f}ms): {result_preview}")
+        logger.info(f"[{tenant.sender_id}] 🔧 TOOL RESULT ({call_name}, {elapsed_ms:.0f}ms): {result_preview}")
 
         return result
 
@@ -156,7 +250,41 @@ class AgentService:
     #  Main entry point
     # ─────────────────────────────────────────────────────────────────────
 
-    async def process(self, sender_id: str, message_text: str = "", image_urls: list[str] = None, page_id: str = "") -> str:
+    async def _get_customer_profile(self, sender_id: str, tenant: TenantContext) -> str:
+        """Fetch customer profile from Supabase and return a context string."""
+        try:
+            result = get_supabase().table("customers") \
+                .select("name, preferred_sizes, last_delivery_address, contact_number") \
+                .eq("messenger_psid", sender_id) \
+                .eq("shop_id", tenant.shop_id) \
+                .maybe_single() \
+                .execute()
+
+            if not result.data:
+                return ""
+
+            profile = result.data
+            # Only inject if there's meaningful data
+            parts = []
+            if profile.get("name"):
+                parts.append(f"Name: {profile['name']}")
+            if profile.get("preferred_sizes"):
+                parts.append(f"Known Sizes: {profile['preferred_sizes']}")
+            if profile.get("last_delivery_address"):
+                parts.append(f"Last Delivery Address: {profile['last_delivery_address']}")
+            if profile.get("contact_number"):
+                parts.append(f"Contact: {profile['contact_number']}")
+
+            if not parts:
+                return ""
+
+            return f"\n\n[Customer Profile: {', '.join(parts)}. Use this data to streamline confirmations if they re-order.]"
+
+        except Exception as e:
+            logger.warning(f"[{sender_id}] Customer profile lookup failed: {e}")
+            return ""
+
+    async def process(self, sender_id: str, message_text: str = "", image_urls: list[str] = None, tenant: TenantContext = None) -> str:
         """Process a message through the ReAct agent loop."""
         # Truncate message for log readability
         msg_preview = (message_text[:120] + "…") if len(message_text) > 120 else message_text
@@ -168,10 +296,14 @@ class AgentService:
 
         request_start = time.perf_counter()
 
+        # Inject customer profile into system instruction if available
+        profile_context = await self._get_customer_profile(sender_id, tenant) if tenant else ""
+        self._active_system_instruction = SYSTEM_INSTRUCTION + profile_context
+
         if self.provider == "openai":
-            reply, tokens = await self._process_openai(sender_id, message_text, image_urls, page_id)
+            reply, tokens = await self._process_openai(sender_id, message_text, image_urls, tenant)
         else:
-            reply, tokens = await self._process_gemini(sender_id, message_text, image_urls, page_id)
+            reply, tokens = await self._process_gemini(sender_id, message_text, image_urls, tenant)
 
         total_ms = (time.perf_counter() - request_start) * 1000
 
@@ -224,7 +356,7 @@ class AgentService:
                     {"role": "user", "content": text_convo}
                 ]
                 resp = await self.openai_client.chat.completions.create(
-                    model="gpt-5-mini",  # Use fast low-cost model
+                    model="gpt-4.1-nano",  # Use cheapest model for summarization
                     messages=messages,
                 )
                 if resp.choices and resp.choices[0].message.content:
@@ -232,7 +364,7 @@ class AgentService:
             elif self.provider == "gemini" and self.gemini_client:
                 from google.genai import types
                 resp = await self.gemini_client.aio.models.generate_content(
-                    model="gemini-3-flash-preview",
+                    model="gemini-2.5-flash",  # Cheaper model for summarization
                     contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt + "\n\n" + text_convo)])],
                 )
                 if resp.candidates and resp.candidates[0].content.parts:
@@ -245,10 +377,10 @@ class AgentService:
             logger.error(f"[{sender_id}] Summarization failed: {e}", exc_info=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    #  Gemini path (unchanged logic)
+    #  Gemini path
     # ─────────────────────────────────────────────────────────────────────
 
-    async def _process_gemini(self, sender_id: str, message_text: str, image_urls: list[str] | None, page_id: str) -> tuple[str, dict]:
+    async def _process_gemini(self, sender_id: str, message_text: str, image_urls: list[str] | None, tenant: TenantContext) -> tuple[str, dict]:
         from google import genai
         from google.genai import types
 
@@ -273,7 +405,6 @@ class AgentService:
                     import io
                     import tempfile
                     import os
-                    import uuid
 
                     async with httpx.AsyncClient(timeout=10.0) as http_client:
                         response = await http_client.get(url)
@@ -310,7 +441,7 @@ class AgentService:
 
         # 3. Setup Agent Prompt
         config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=self._active_system_instruction,
             tools=self.tools,
             temperature=0.7,
             # We explicitly handle the loop ourselves
@@ -372,10 +503,19 @@ class AgentService:
 
             logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_calls)} tool(s): {[c.name for c in tool_calls]}")
 
-            # Execute tools
+            # Execute tools in parallel — tenant context injected, not from LLM args
+            tasks = [
+                self._execute_tool(call.name, dict(call.args) if call.args else {}, tenant)
+                for call in tool_calls
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Match results back to their tool calls by index order
             tool_responses = []
-            for call in tool_calls:
-                result = await self._execute_tool(call.name, dict(call.args) if call.args else {}, sender_id, page_id)
+            for call, result in zip(tool_calls, results):
+                if isinstance(result, Exception):
+                    logger.error(f"[{sender_id}] Tool {call.name} raised in parallel: {result}")
+                    result = {"error": str(result)}
                 tool_responses.append(types.Part.from_function_response(
                     name=call.name,
                     response=result
@@ -396,7 +536,7 @@ class AgentService:
     #  OpenAI path (same logic, different SDK)
     # ─────────────────────────────────────────────────────────────────────
 
-    async def _process_openai(self, sender_id: str, message_text: str, image_urls: list[str] | None, page_id: str) -> tuple[str, dict]:
+    async def _process_openai(self, sender_id: str, message_text: str, image_urls: list[str] | None, tenant: TenantContext) -> tuple[str, dict]:
         from app.core.openai_tools import OPENAI_TOOLS
 
         _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0}
@@ -406,7 +546,7 @@ class AgentService:
             return "Server is currently unavailable.", _zero_tokens
 
         # 1. Load History (as OpenAI message dicts)
-        messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+        messages = [{"role": "system", "content": self._active_system_instruction}]
         messages.extend(memory_service.get_openai_history(sender_id))
         logger.debug(f"[{sender_id}] Loaded {len(messages) - 1} history entries (excl. system)")
 
@@ -518,10 +658,22 @@ class AgentService:
             tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
             logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_names)} tool(s): {tool_names}")
 
-            # Execute tools
-            for tc in assistant_msg.tool_calls:
-                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                result = await self._execute_tool(tc.function.name, args, sender_id, page_id)
+            # Execute tools in parallel — tenant context injected, not from LLM args
+            tasks = [
+                self._execute_tool(
+                    tc.function.name,
+                    json.loads(tc.function.arguments) if tc.function.arguments else {},
+                    tenant
+                )
+                for tc in assistant_msg.tool_calls
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Match results back to their tool calls by index order
+            for tc, result in zip(assistant_msg.tool_calls, results):
+                if isinstance(result, Exception):
+                    logger.error(f"[{sender_id}] Tool {tc.function.name} raised in parallel: {result}")
+                    result = {"error": str(result)}
 
                 tool_msg = {
                     "role": "tool",

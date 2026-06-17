@@ -7,11 +7,10 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     facebook_verify_token: str
-    facebook_page_access_token: str
     gemini_api_key: str
     openai_api_key: str | None = None
-    pinecone_api_key: str
-    gcp_service_account_json: str | None = None
+    supabase_url: str
+    supabase_service_role_key: str
     llm_provider: str = "gemini"  # "gemini" or "openai"
     message_batch_timeout: float = 4
     conversation_ttl: int = 600

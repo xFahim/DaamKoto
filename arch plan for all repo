@@ -1,0 +1,73 @@
+# Messenger Bot Platform MVP Architecture
+
+Based on your vision, here is the surface-level architectural plan broken down by repos and services. This separates concerns beautifully: AI heavy-lifting in Python, user dashboard in Next.js, and data in Supabase.
+
+## 1. The Repositories
+
+### Repo A: Bot Engine (Python / FastAPI)
+*Current Repo: `DaamKoto`*
+- **Hosted On**: Railway
+- **Core Role**: The brain of the bot. 
+- **Responsibilities**:
+  - Receive webhooks from Facebook Messenger.
+  - Fetch conversation history and tenant (shop) configuration from Supabase.
+  - Run the RAG/Agentic workflow (OpenAI tools, vector search).
+  - Execute tools (e.g., query Supabase for product availability, write order to Supabase).
+  - Send replies back to Facebook via the Graph API.
+- **What it DOESN'T do**: It doesn't handle user authentication for your dashboard, and it doesn't serve UI.
+
+### Repo B: Platform Dashboard (Next.js)
+*New Repo*
+- **Hosted On**: Vercel (recommended)
+- **Core Role**: The command center for your clients (business owners).
+- **Responsibilities**:
+  - **Frontend UI**: Built with React/Next.js (Tailwind, Shadcn).
+  - **Backend (Next.js API Routes)**: Handing secure operations like Facebook OAuth to get page tokens.
+  - **Auth**: Allows business owners to sign up/login (using Supabase Auth).
+  - **Dashboard Features**:
+    - View and manage orders placed via the bot.
+    - View incoming/outgoing chat history.
+    - Add/edit products in their catalog.
+    - Connect their Facebook Page (saving the Page Access Token to Supabase).
+
+### Service C: Database & Auth (Supabase)
+- **Hosted On**: Supabase Cloud
+- **Core Role**: The single source of truth connecting Repo A and Repo B.
+- **Responsibilities**:
+  - Store Users/Tenants (Business owners).
+  - Store Facebook Page Access Tokens.
+  - Store Products (Inventory).
+  - Store Orders and Order Items.
+  - Store Chat History (if you want the dashboard to see live texts).
+  - Provide realtime capabilities (so when the Python bot writes an order to Supabase, the Next.js dashboard updates instantly).
+
+---
+
+## 2. How They Connect (The Flow)
+
+Let's look at the two main workflows to see how these three pieces interact.
+
+### Flow A: Onboarding a New Shop
+1. A business owner visits your Next.js site and signs up via Supabase Auth.
+2. They click "Connect Facebook Page". Next.js handles the FB OAuth flow and gets a `page_access_token`.
+3. The Next.js API saves this `page_access_token` and `page_id` into the **Supabase** `shops` table.
+
+### Flow B: A Customer Messages the Page
+1. A customer sends a message on Messenger.
+2. Facebook sends a webhook event to your **FastAPI (Railway)** app.
+3. The **FastAPI** app sees the `page_id` in the webhook. It asks **Supabase**: *"Hey, what is the access token for this page?"*
+4. The **FastAPI** agent processes the message. If the customer wants to buy something, the agent uses the "Place Order Tool".
+5. The "Place Order Tool" writes a new row to the `orders` table in **Supabase**.
+6. **Supabase** emits a realtime event. The **Next.js** dashboard (which the shop owner has open) instantly pops up with: *"New Order Received!"*
+7. The **FastAPI** app replies to the customer on Facebook confirming the order.
+
+---
+
+## Next Steps
+
+> [!TIP]
+> This modular approach is highly scalable. You can deploy the frontend without touching the bot, and vice versa.
+
+How does this separation sound to you? 
+
+If you are happy with this high-level architecture, we can pick the very first piece to tackle. I recommend we start by **designing the Supabase schema** together, as both the Next.js app and the FastAPI app will need to talk to it.

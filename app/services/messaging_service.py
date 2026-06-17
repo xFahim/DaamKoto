@@ -1,7 +1,6 @@
 """Service for sending messages to Facebook Messenger users."""
 
 import httpx
-from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.services.reply_context import store_mid
 
@@ -14,14 +13,15 @@ class MessagingService:
     """Service for handling message sending to Facebook Messenger."""
 
     @staticmethod
-    async def send_typing_on(recipient_id: str) -> None:
+    async def send_typing_on(recipient_id: str, access_token: str) -> None:
         """
         Send a typing indicator to show the bot is processing.
 
         Args:
             recipient_id: The Facebook user ID to show typing to
+            access_token: The Facebook page access token for this tenant
         """
-        params = {"access_token": settings.facebook_page_access_token}
+        params = {"access_token": access_token}
         payload = {
             "recipient": {"id": recipient_id},
             "sender_action": "typing_on",
@@ -35,18 +35,19 @@ class MessagingService:
             logger.debug(f"Failed to send typing indicator: {e}")
 
     @staticmethod
-    async def send_message(recipient_id: str, message_text: str) -> bool:
+    async def send_message(recipient_id: str, message_text: str, access_token: str) -> bool:
         """
         Send a text message to a Facebook Messenger user.
 
         Args:
             recipient_id: The Facebook user ID to send the message to
             message_text: The text content of the message
+            access_token: The Facebook page access token for this tenant
 
         Returns:
             True if the message was sent successfully, False otherwise
         """
-        params = {"access_token": settings.facebook_page_access_token}
+        params = {"access_token": access_token}
         payload = {
             "recipient": {"id": recipient_id},
             "message": {"text": message_text},
@@ -74,11 +75,16 @@ class MessagingService:
             return False
 
     @staticmethod
-    async def send_image(recipient_id: str, image_url: str) -> bool:
+    async def send_image(recipient_id: str, image_url: str, access_token: str) -> bool:
         """
         Send an image via Facebook Messenger API.
+
+        Args:
+            recipient_id: The Facebook user ID to send the image to
+            image_url: The URL of the image to send
+            access_token: The Facebook page access token for this tenant
         """
-        params = {"access_token": settings.facebook_page_access_token}
+        params = {"access_token": access_token}
         payload = {
             "recipient": {"id": recipient_id},
             "message": {

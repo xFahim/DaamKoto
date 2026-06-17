@@ -1,10 +1,9 @@
-fastapi
+fastapi>=0.115.0
 uvicorn[standard]
 python-multipart
 httpx
-google-cloud-aiplatform
 google-genai
-pinecone
+supabase
 python-dotenv
 pydantic
 pydantic-settings

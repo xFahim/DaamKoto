@@ -1,11 +1,17 @@
 """Service layer for Facebook Messenger webhook processing."""
 
+from cachetools import TTLCache
 from app.core.config import settings
 from app.core.logging_config import get_logger
+from app.core.tenant_context import resolve_tenant, TenantNotFoundError
 from app.schemas.facebook import FacebookWebhookPayload
 from app.services.handlers.message_router import message_router
 
 logger = get_logger(__name__)
+
+# Cache processed message IDs (mids) to handle Facebook webhook retries.
+# 5 minutes TTL is generally sufficient to catch immediate retry bursts.
+_processed_mids = TTLCache(maxsize=10000, ttl=300)
 
 
 class FacebookService:
@@ -38,7 +44,8 @@ class FacebookService:
         """
         Process incoming Facebook webhook events.
 
-        Routes messages to appropriate handlers based on message type (text/image).
+        Resolves the tenant from bot_settings using the Facebook page ID,
+        then routes messages through the pipeline with full tenant context.
 
         Args:
             payload: The validated Facebook webhook payload
@@ -46,21 +53,39 @@ class FacebookService:
         logger.info(f"Webhook event received — object={payload.object}, entries={len(payload.entry)}")
 
         for entry in payload.entry:
-            # TODO: Map Facebook page ID to internal store name for production
-            # For now, hardcode to "goodybro" for testing
-            page_id = "goodybro"  # entry.id
+            # Resolve tenant from bot_settings using Facebook page ID
+            try:
+                tenant = await resolve_tenant(entry.id)
+            except TenantNotFoundError:
+                logger.error(
+                    f"No bot_settings row for facebook_page_id={entry.id} — "
+                    f"skipping all messages in this entry"
+                )
+                continue
 
             for messaging in entry.messaging:
                 sender_id = messaging.sender.id
+                # Stamp the sender_id on the tenant context for this message
+                tenant.sender_id = sender_id
 
                 # Process message events
                 if messaging.message:
                     message_dict = messaging.message.model_dump()
+                    mid = message_dict.get('mid')
+                    
+                    # --- Webhook Idempotency Check ---
+                    if mid:
+                        if mid in _processed_mids:
+                            logger.info(f"[{sender_id}] ♻️ Idempotency check: Dropping duplicate message (mid={mid})")
+                            continue
+                        _processed_mids[mid] = True
+                    # ---------------------------------
+
                     text = message_dict.get('text', '')
                     att_count = len(message_dict.get('attachments') or [])
                     logger.info(
                         f"[{sender_id}] 📨 Webhook message — "
-                        f"mid={message_dict.get('mid')} | "
+                        f"mid={mid} | "
                         f"text=\"{text[:80]}{'…' if len(text or '') > 80 else ''}\" | "
                         f"attachments={att_count}"
                     )
@@ -69,7 +94,7 @@ class FacebookService:
                     await message_router.route_message(
                         sender_id=sender_id,
                         message=message_dict,
-                        page_id=page_id,
+                        tenant=tenant,
                     )
 
                 # Log other event types at debug level

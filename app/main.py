@@ -27,8 +27,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="DaamKoto",
-    description="A robust, scalable FastAPI project for integrating Facebook Messenger Webhooks",
-    version="1.0.0",
+    description="Multi-tenant SaaS chatbot platform for Facebook Messenger e-commerce",
+    version="2.0.0",
     lifespan=lifespan
 )
 
