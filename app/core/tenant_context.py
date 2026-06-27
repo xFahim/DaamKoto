@@ -70,7 +70,7 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
         logger.error(f"Supabase query failed for facebook_page_id={facebook_page_id}: {e}")
         raise TenantNotFoundError(f"DB error resolving tenant: {e}") from e
 
-    if not result.data:
+    if not result or not result.data:
         raise TenantNotFoundError(
             f"No bot_settings row for facebook_page_id={facebook_page_id}"
         )
