@@ -63,7 +63,7 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
     try:
         result = get_supabase().table("bot_settings") \
             .select("shop_id, facebook_page_access_token") \
-            .eq("facebook_page_id", facebook_page_id) \
+            .eq("page_id", facebook_page_id) \
             .maybe_single() \
             .execute()
     except Exception as e:
