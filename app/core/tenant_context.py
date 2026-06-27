@@ -62,7 +62,7 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
     # Query Supabase
     try:
         result = get_supabase().table("bot_settings") \
-            .select("shop_id, facebook_page_access_token") \
+            .select("shop_id, page_access_token") \
             .eq("page_id", facebook_page_id) \
             .maybe_single() \
             .execute()
@@ -77,7 +77,7 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
 
     row = result.data
     shop_id = row["shop_id"]
-    token = row["facebook_page_access_token"]
+    token = row["page_access_token"]
 
     # Cache it
     _tenant_cache[facebook_page_id] = {
