@@ -45,21 +45,25 @@ PLATFORM_RULES = (
 
     "## HOW TO SHOW PRODUCTS\n"
     "When search results come back with multiple products:\n"
-    "- Show only the BEST match first (1 product). Send its image using 'send_product_image', mention name, price, and paste the product_url on a new line.\n"
+    "- Show only the BEST match first (1 product). Send its image using 'send_product_image', mention name and price.\n"
     "- Then ask: 'Want to see more options?' or 'Ar dekhben?' (match their language).\n"
     "- Only show the next product when they ask for it.\n"
     "- NEVER dump a list of 3-4 products at once. One at a time, conversationally.\n"
-    "- If only 1 result exists, just show that one.\n\n"
+    "- If only 1 result exists, just show that one.\n"
+    "- NEVER paste any URL or link in your text. There are no product page links — the sale happens right here in the chat.\n\n"
+
+    "## SIZES, VARIANTS & STOCK\n"
+    "- Each product in search results has a 'variants' list — every size is its OWN product_id with its own stock.\n"
+    "- Before preparing an order, ALWAYS know the size. If the user hasn't said one, ask, and mention which sizes are actually available (stock > 0).\n"
+    "- In prepare_order, use the product_id of the EXACT variant matching the user's size — never the product_id of a different size.\n"
+    "- If the requested size is missing or out of stock, say so honestly and offer the sizes that are in stock.\n"
+    "- Don't recite stock numbers unless asked; just treat stock 0 as unavailable.\n\n"
 
     "## IMAGE RULES\n"
     "- NEVER paste image URLs in your text. The user can't click image links on Messenger.\n"
     "- Use the 'send_product_image' tool with the image_url from search results.\n"
     "- Send the image BEFORE or alongside your text about that product.\n"
     "- Max 1 image per reply.\n\n"
-
-    "## PRODUCT LINKS\n"
-    "- When mentioning a product, include its product_url as a raw link on its own line (not inside markdown brackets).\n"
-    "- Example: 'Here is the link\\nhttps://store.example.com/products/...' — Messenger will auto-preview it.\n\n"
 
     "## WHEN TO USE TOOLS\n"
     "- 'search_products': When user asks about any product, color, size, price, or says something like 'show me', 'ache?', 'dekhan'.\n"
@@ -202,12 +206,12 @@ class AgentService:
         allowed: set = _allowed_images.get(key) or set()
 
         for p in products:
-            p.pop("score", None)  # The agent doesn't need vector similarity scores
-            # Expose the id explicitly as product_id — prepare_order requires it
-            p["product_id"] = p.pop("id", None)
+            # Whitelist every variant's image, but only expose the primary one
+            for url in p.pop("all_image_urls", []):
+                allowed.add(url)
             if p.get("image_url"):
                 allowed.add(p["image_url"])
-            if "description" in p and isinstance(p["description"], str):
+            if isinstance(p.get("description"), str):
                 p["description"] = p["description"][:100] + ("..." if len(p["description"]) > 100 else "")
 
         _allowed_images[key] = allowed
@@ -257,7 +261,7 @@ class AgentService:
         # Validate against the catalog — the LLM can only order real products of THIS shop
         supabase = await get_supabase()
         db_result = await supabase.table("products") \
-            .select("id, name, price") \
+            .select("id, name, price, attributes") \
             .eq("shop_id", tenant.shop_id) \
             .in_("id", product_ids) \
             .execute()
@@ -273,10 +277,32 @@ class AgentService:
         items = []
         total = 0.0
         for pid, qty in zip(product_ids, quantities):
-            unit_price = float(found[pid]["price"])
+            row = found[pid]
+            attrs = row.get("attributes") if isinstance(row.get("attributes"), dict) else {}
+            size = attrs.get("size")
+            display_name = f"{row['name']} (size {size})" if size else row["name"]
+
+            # Stock check — attributes.stock is per size variant
+            stock = attrs.get("stock")
+            try:
+                stock = int(stock) if stock is not None else None
+            except (TypeError, ValueError):
+                stock = None
+            if stock is not None and stock <= 0:
+                return {
+                    "error": f"'{display_name}' is OUT OF STOCK. Tell the user and offer "
+                             "another size or product from the search results."
+                }
+            if stock is not None and qty > stock:
+                return {
+                    "error": f"Only {stock} left in stock for '{display_name}' but {qty} requested. "
+                             "Ask the user if the available quantity works."
+                }
+
+            unit_price = float(row["price"])
             items.append({
                 "product_id": pid,
-                "name": found[pid]["name"],
+                "name": display_name,
                 "unit_price": unit_price,
                 "quantity": qty,
                 "line_total": round(unit_price * qty, 2),

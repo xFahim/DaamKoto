@@ -97,9 +97,9 @@ Declared as Python stubs in `app/core/tools.py` (Gemini auto-parse) mirrored in
 
 | Tool | Notes |
 |------|-------|
-| `search_products(query)` | RagService → `match_products_hybrid` RPC (FTS + pgvector). Returns `product_id` per row; whitelists returned `image_url`s |
+| `search_products(query)` | RagService → `match_products_hybrid` RPC (FTS + pgvector), then a second query expands hits into their full VARIANT family (every size is its own products row sharing the same `name`; `attributes` holds size/color/stock/fabric). Returns products grouped by name with a `variants` list (`product_id` + compacted attributes per size); whitelists all variant `image_url`s. There is no product_url — the table has no such column |
 | `get_company_policy(topic)` | `bot_settings.store_policies` |
-| `prepare_order(product_ids, quantities, delivery_address, contact_number, notes)` | Validates products against catalog, computes total, stores 15-min draft. Does NOT write an order |
+| `prepare_order(product_ids, quantities, delivery_address, contact_number, notes)` | Validates products against catalog, enforces `attributes.stock` per variant (rejects out-of-stock / over-stock), computes total, stores 15-min draft. Item names include the size. Does NOT write an order |
 | `confirm_order()` | Consumes the draft (idempotent) → customers UPDATE + orders INSERT (`customer_id`, `total_amount`, `status='processing'`, delivery fields; the live `orders_status_check` constraint allows only processing/shipped/delivered/cancelled) + `order_items` rows |
 | `check_order_status(order_number)` | Scoped to shop AND this customer's `customer_id` — customers can't read each other's orders |
 | `send_product_image(image_url)` | URL must be in the whitelist from this conversation's search results (blocks injected/hallucinated URLs) |

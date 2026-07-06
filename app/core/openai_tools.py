@@ -12,7 +12,9 @@ OPENAI_TOOLS = [
             "name": "search_products",
             "description": (
                 "Search the product catalog for availability, price, colors, or sizes. "
-                "Results include a product_id you must use when preparing an order."
+                "Each result has a 'variants' list — every size is a separate variant "
+                "with its own product_id and stock. When preparing an order, use the "
+                "product_id of the exact variant (size) the user wants."
             ),
             "parameters": {
                 "type": "object",
@@ -59,7 +61,7 @@ OPENAI_TOOLS = [
                     "product_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "The product_id values from search_products results, in order."
+                        "description": "The variant product_id values from search_products results (pick the variant matching the user's size), in order."
                     },
                     "quantities": {
                         "type": "array",

@@ -20,8 +20,10 @@ def search_products(query: str) -> list[dict]:
         query: The search string (e.g. 'red t shirt', 'sneakers under 2000').
 
     Returns:
-        List of matching products, each with a product_id you must use when
-        preparing an order, plus name, price, description, image_url, product_url.
+        List of matching products with name, price, description, image_url and a
+        'variants' list. EVERY SIZE IS A SEPARATE VARIANT with its own product_id
+        and stock — when preparing an order, use the product_id of the exact
+        variant (size) the user wants.
     """
     # Stub — real logic is in _execute_tool → RagService.search_catalog()
     return []
@@ -54,7 +56,8 @@ def prepare_order(
     confirm_order only after they clearly say yes.
 
     Args:
-        product_ids: The product_id values from search_products results, in order.
+        product_ids: The variant product_id values from search_products results
+            (pick the variant matching the user's size), in order.
         quantities: Quantity for each product, same order as product_ids.
         delivery_address: The complete delivery address provided by the user.
         contact_number: The user's contact phone number.
