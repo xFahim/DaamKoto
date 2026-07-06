@@ -10,7 +10,10 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "search_products",
-            "description": "Search the product catalog for availability, price, colors, or sizes.",
+            "description": (
+                "Search the product catalog for availability, price, colors, or sizes. "
+                "Results include a product_id you must use when preparing an order."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -43,18 +46,25 @@ OPENAI_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "execute_order",
-            "description": "Place an order after the user explicitly confirms all details.",
+            "name": "prepare_order",
+            "description": (
+                "Prepare an order draft once the user has provided all details. Does NOT place "
+                "the order. Returns a summary with validated names and the exact total. You MUST "
+                "relay this summary to the user and ask for explicit confirmation, then call "
+                "confirm_order only after they clearly say yes."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "item_names": {
-                        "type": "string",
-                        "description": "The exact names or IDs of the items being purchased."
+                    "product_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "The product_id values from search_products results, in order."
                     },
-                    "sizes": {
-                        "type": "string",
-                        "description": "The required sizes or variants, if applicable."
+                    "quantities": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Quantity for each product, same order as product_ids."
                     },
                     "delivery_address": {
                         "type": "string",
@@ -63,9 +73,28 @@ OPENAI_TOOLS = [
                     "contact_number": {
                         "type": "string",
                         "description": "The user's contact phone number."
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Sizes, variants, or special instructions (e.g. 'size L, blue')."
                     }
                 },
-                "required": ["item_names", "sizes", "delivery_address", "contact_number"]
+                "required": ["product_ids", "quantities", "delivery_address", "contact_number"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confirm_order",
+            "description": (
+                "Place the order previously prepared with prepare_order. Call ONLY after the "
+                "user explicitly confirms (e.g. 'yes', 'haan', 'confirm')."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     },
@@ -73,7 +102,7 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "check_order_status",
-            "description": "Check the current status of an existing order by its order number.",
+            "description": "Check the current status of one of THIS customer's existing orders by order number.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -90,13 +119,16 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_product_image",
-            "description": "Send a product image physically to the user's chat screen. Use this when the user wants to see an item.",
+            "description": (
+                "Send a product image to the user's chat screen. Use this when the user wants "
+                "to see an item. Only image_url values from search_products results are allowed."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "image_url": {
                         "type": "string",
-                        "description": "The direct URL of the image you want to send."
+                        "description": "The image_url field of a product from search_products results."
                     }
                 },
                 "required": ["image_url"]

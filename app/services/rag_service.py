@@ -24,12 +24,12 @@ class RagService:
         """Verify connectivity — lightweight startup check."""
         logger.info("RagService initialized (Supabase pgvector + gemini-embedding-2)")
 
-    async def search_catalog(self, query: str, page_id: str) -> list[dict]:
+    async def search_catalog(self, query: str, shop_id: str) -> list[dict]:
         """
         Search products via Supabase pgvector similarity.
 
-        Generates a 768-dim embedding for the query text, then calls a
-        Supabase RPC function `match_products` for cosine similarity search.
+        Generates a 768-dim embedding for the query text, then calls the
+        Supabase RPC function `match_products_hybrid` (FTS + cosine similarity).
         """
         try:
             query_embedding = await self.get_text_embedding(text=query)
@@ -38,11 +38,12 @@ class RagService:
                 return []
 
             # Call Supabase RPC function for hybrid search (FTS + pgvector)
-            result = get_supabase().rpc("match_products_hybrid", {
+            supabase = await get_supabase()
+            result = await supabase.rpc("match_products_hybrid", {
                 "query_text": query,
                 "query_embedding": query_embedding,
                 "match_count": 5,
-                "filter_shop_id": page_id,
+                "filter_shop_id": shop_id,
             }).execute()
 
             products = []
@@ -57,7 +58,7 @@ class RagService:
                     "score": row.get("similarity", 0),
                 })
 
-            logger.info(f"Catalog search: {len(products)} matches for \"{query[:60]}\" (shop={page_id})")
+            logger.info(f"Catalog search: {len(products)} matches for \"{query[:60]}\" (shop={shop_id})")
             return products
 
         except Exception as e:

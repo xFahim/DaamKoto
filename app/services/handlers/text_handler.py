@@ -1,9 +1,13 @@
 """Handler for processing text messages from Facebook Messenger."""
 
+import asyncio
+
 from app.core.logging_config import get_logger
 from app.core.tenant_context import TenantContext
 from app.services.agent_service import agent_service
 from app.services.messaging_service import messaging_service
+from app.services.persistence_service import persistence_service
+from app.services.tenant_config import get_fallback_message
 
 logger = get_logger(__name__)
 
@@ -22,9 +26,15 @@ class TextHandler:
         Pass the message to the central Agent Service, get the reply, and send it.
         """
         try:
-            import asyncio
             # Show typing indicator immediately
             await messaging_service.send_typing_on(sender_id, access_token=tenant.page_access_token)
+
+            # Persist the user's message for the dashboard transcript (fire-and-forget)
+            transcript_text = message_text
+            if image_urls:
+                suffix = "\n".join(f"[image] {u}" for u in image_urls)
+                transcript_text = f"{transcript_text}\n{suffix}".strip()
+            persistence_service.log_message_bg(tenant, "customer", transcript_text)
 
             # Let the agent handle the entire multi-turn logic
             reply = await agent_service.process(sender_id, message_text, image_urls=image_urls, tenant=tenant)
@@ -34,23 +44,27 @@ class TextHandler:
             await messaging_service.send_typing_on(sender_id, access_token=tenant.page_access_token)
             await asyncio.sleep(delay)
 
-            # Step 3: Send the final reply
+            # Send the final reply
             await messaging_service.send_message(
                 recipient_id=sender_id,
                 message_text=reply,
                 access_token=tenant.page_access_token,
             )
 
+            # Persist the bot's reply for the dashboard transcript
+            persistence_service.log_message_bg(tenant, "bot", reply)
+
             logger.info(f"[{sender_id}] ✅ Reply sent ({len(reply)} chars)")
 
         except Exception as e:
             logger.error(f"[{sender_id}] Text handler error: {e}", exc_info=True)
+            try:
+                fallback = await get_fallback_message(tenant.shop_id)
+            except Exception:
+                fallback = "Sorry, I'm having trouble processing your message right now! Please try again later!"
             await messaging_service.send_message(
                 recipient_id=sender_id,
-                message_text=(
-                    "Sorry, I'm having trouble processing your message right now! "
-                    "Please try again later!"
-                ),
+                message_text=fallback,
                 access_token=tenant.page_access_token,
             )
 

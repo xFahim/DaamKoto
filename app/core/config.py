@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     facebook_verify_token: str
+    facebook_app_secret: str | None = None      # Meta App Secret — enables X-Hub-Signature-256 verification
+    internal_webhook_secret: str | None = None  # Shared secret for /internal/webhook/* endpoints
     gemini_api_key: str
     openai_api_key: str | None = None
     supabase_url: str

@@ -5,14 +5,16 @@ by querying the bot_settings table in Supabase. The result is cached
 in-memory for 60 seconds to avoid repeated DB hits on every message.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace
 from cachetools import TTLCache
 from app.core.dependencies import get_supabase
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Cache tenant lookups for 60s — avoids hitting Supabase on every webhook message
+# Cache tenant lookups for 60s — avoids hitting Supabase on every webhook message.
+# Inactive tenants are cached too, so a disabled bot doesn't hammer the DB.
+# Flipping is_active takes effect within 60s.
 _tenant_cache: TTLCache = TTLCache(maxsize=200, ttl=60)
 
 
@@ -21,18 +23,31 @@ class TenantNotFoundError(Exception):
     pass
 
 
-@dataclass
-class TenantContext:
-    """Per-request tenant state resolved from bot_settings.
+class TenantInactiveError(Exception):
+    """Raised when the bot for this page exists but is_active is false."""
+    pass
 
-    Resolved once at webhook entry and threaded through the entire
-    message processing pipeline. Tools never see shop_id — it's
-    injected server-side in the ReAct execution bridge.
+
+@dataclass(frozen=True)
+class TenantContext:
+    """Per-message tenant state resolved from bot_settings.
+
+    Frozen: one webhook entry can contain events from multiple senders, and
+    the batcher holds references to this object across await points — a
+    mutable sender_id would let one sender's order be attributed to another.
+    Use for_sender() to derive a per-message copy.
+
+    Tools never see shop_id — it's injected server-side in the ReAct
+    execution bridge.
     """
     shop_id: str                    # Internal UUID from bot_settings
     page_access_token: str          # Facebook Graph API token for this page
     facebook_page_id: str           # The numeric Facebook page ID (entry.id)
-    sender_id: str = ""             # Messenger PSID — stamped per-message
+    sender_id: str = ""             # Messenger PSID — stamped per-message via for_sender()
+
+    def for_sender(self, sender_id: str) -> "TenantContext":
+        """Return a copy of this context stamped with a specific sender PSID."""
+        return replace(self, sender_id=sender_id)
 
 
 async def resolve_tenant(facebook_page_id: str) -> TenantContext:
@@ -48,47 +63,48 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
 
     Raises:
         TenantNotFoundError: If no bot_settings row matches.
+        TenantInactiveError: If the bot exists but is switched off (is_active=false).
     """
     # Check cache first
     cached = _tenant_cache.get(facebook_page_id)
-    if cached:
+    if cached is None:
+        # Query Supabase
+        try:
+            supabase = await get_supabase()
+            result = await supabase.table("bot_settings") \
+                .select("shop_id, page_access_token, is_active") \
+                .eq("page_id", facebook_page_id) \
+                .maybe_single() \
+                .execute()
+        except Exception as e:
+            logger.error(f"Supabase query failed for facebook_page_id={facebook_page_id}: {e}")
+            raise TenantNotFoundError(f"DB error resolving tenant: {e}") from e
+
+        if not result or not result.data:
+            raise TenantNotFoundError(
+                f"No bot_settings row for facebook_page_id={facebook_page_id}"
+            )
+
+        cached = {
+            "shop_id": result.data["shop_id"],
+            "page_access_token": result.data["page_access_token"],
+            "is_active": bool(result.data.get("is_active")),
+        }
+        _tenant_cache[facebook_page_id] = cached
+        logger.info(
+            f"Tenant resolved: facebook_page_id={facebook_page_id} → "
+            f"shop_id={cached['shop_id']} (active={cached['is_active']})"
+        )
+    else:
         logger.debug(f"Tenant cache hit for facebook_page_id={facebook_page_id}")
-        return TenantContext(
-            shop_id=cached["shop_id"],
-            page_access_token=cached["page_access_token"],
-            facebook_page_id=facebook_page_id,
+
+    if not cached["is_active"]:
+        raise TenantInactiveError(
+            f"Bot for facebook_page_id={facebook_page_id} is inactive (is_active=false)"
         )
-
-    # Query Supabase
-    try:
-        result = get_supabase().table("bot_settings") \
-            .select("shop_id, page_access_token") \
-            .eq("page_id", facebook_page_id) \
-            .maybe_single() \
-            .execute()
-    except Exception as e:
-        logger.error(f"Supabase query failed for facebook_page_id={facebook_page_id}: {e}")
-        raise TenantNotFoundError(f"DB error resolving tenant: {e}") from e
-
-    if not result or not result.data:
-        raise TenantNotFoundError(
-            f"No bot_settings row for facebook_page_id={facebook_page_id}"
-        )
-
-    row = result.data
-    shop_id = row["shop_id"]
-    token = row["page_access_token"]
-
-    # Cache it
-    _tenant_cache[facebook_page_id] = {
-        "shop_id": shop_id,
-        "page_access_token": token,
-    }
-
-    logger.info(f"Tenant resolved: facebook_page_id={facebook_page_id} → shop_id={shop_id}")
 
     return TenantContext(
-        shop_id=shop_id,
-        page_access_token=token,
+        shop_id=cached["shop_id"],
+        page_access_token=cached["page_access_token"],
         facebook_page_id=facebook_page_id,
     )

@@ -4,7 +4,6 @@ from typing import Any
 from app.core.logging_config import get_logger
 from app.core.tenant_context import TenantContext
 from app.services.batching_service import message_batcher
-from app.services.handlers.image_handler import image_handler
 from app.services.messaging_service import messaging_service
 from app.services.input_guard import input_guard
 from app.services.reply_context import store_mid, resolve_mid
@@ -81,8 +80,8 @@ class MessageRouter:
                         ),
                         access_token=tenant.page_access_token,
                     )
-                elif payload == "rate_limited":
-                    logger.warning(f"[{sender_id}] 🚫 Rejected: rate limited")
+                elif payload == "rate_limited_notify":
+                    logger.warning(f"[{sender_id}] 🚫 Rejected: rate limited (notifying once)")
                     await messaging_service.send_message(
                         recipient_id=sender_id,
                         message_text=(
@@ -91,6 +90,8 @@ class MessageRouter:
                         ),
                         access_token=tenant.page_access_token,
                     )
+                elif payload == "rate_limited_silent":
+                    logger.warning(f"[{sender_id}] 🚫 Rejected: rate limited (silent)")
             elif status == "silent_drop":
                 logger.debug(f"[{sender_id}] Silent drop — empty/stripped message")
                 handled = True

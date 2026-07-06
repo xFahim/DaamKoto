@@ -5,11 +5,14 @@ a database webhook fires to this endpoint. We immediately return 200 OK,
 then generate the embedding in the background and update the product row.
 """
 
+import hmac
+
 import httpx
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, status
 from pydantic import BaseModel, Field
 
 from google.genai import types
+from app.core.config import settings
 from app.core.dependencies import genai_client, get_supabase
 from app.core.logging_config import get_logger
 
@@ -50,13 +53,30 @@ class SupabaseWebhookPayload(BaseModel):
 async def handle_product_webhook(
     payload: SupabaseWebhookPayload,
     background_tasks: BackgroundTasks,
+    x_internal_secret: str | None = Header(default=None),
 ) -> dict[str, str]:
     """
     Receive a product insert webhook from Supabase.
 
-    Returns 200 immediately to prevent webhook timeouts.
-    Embedding generation runs as a FastAPI BackgroundTask.
+    Requires the x-internal-secret header to match INTERNAL_WEBHOOK_SECRET
+    (configured on the Supabase webhook). Returns 200 immediately to prevent
+    webhook timeouts. Embedding generation runs as a FastAPI BackgroundTask.
     """
+    if settings.internal_webhook_secret:
+        if not x_internal_secret or not hmac.compare_digest(
+            x_internal_secret, settings.internal_webhook_secret
+        ):
+            logger.warning("Internal webhook rejected — bad or missing x-internal-secret header")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden",
+            )
+    else:
+        logger.warning(
+            "INTERNAL_WEBHOOK_SECRET is not set — /internal/webhook/supabase-product "
+            "is open to the internet. Set it and add the header to the Supabase webhook."
+        )
+
     product = payload.record
     logger.info(
         f"📦 Webhook received: product={product.id} shop={product.shop_id} name=\"{product.name[:60]}\""
@@ -142,7 +162,8 @@ async def _generate_and_store_embedding(product: ProductRecord) -> None:
         logger.info(f"[{product_id}] ✅ Embedding generated ({len(embedding_vector)}-dim)")
 
         # ── 4. Update Supabase ───────────────────────────────────────
-        get_supabase().table("products").update({
+        supabase = await get_supabase()
+        await supabase.table("products").update({
             "embedding": embedding_vector,
             "embedding_status": "completed",
         }).eq("id", product_id).execute()
@@ -154,7 +175,8 @@ async def _generate_and_store_embedding(product: ProductRecord) -> None:
 
         # Mark as failed so the admin dashboard can surface the error
         try:
-            get_supabase().table("products").update({
+            supabase = await get_supabase()
+            await supabase.table("products").update({
                 "embedding_status": "failed",
             }).eq("id", product_id).execute()
         except Exception as update_err:

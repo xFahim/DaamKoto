@@ -20,7 +20,8 @@ def search_products(query: str) -> list[dict]:
         query: The search string (e.g. 'red t shirt', 'sneakers under 2000').
 
     Returns:
-        List of matching products.
+        List of matching products, each with a product_id you must use when
+        preparing an order, plus name, price, description, image_url, product_url.
     """
     # Stub — real logic is in _execute_tool → RagService.search_catalog()
     return []
@@ -39,24 +40,45 @@ def get_company_policy(topic: str) -> str:
     return ""
 
 
-def execute_order(item_names: str, sizes: str, delivery_address: str, contact_number: str) -> dict:
-    """Place an order after the user explicitly confirms all details.
+def prepare_order(
+    product_ids: list[str],
+    quantities: list[int],
+    delivery_address: str,
+    contact_number: str,
+    notes: str = "",
+) -> dict:
+    """Prepare an order draft once the user has provided all details. Does NOT place the order.
+
+    Returns a summary with validated names and the exact total. You MUST relay
+    this summary to the user and ask for explicit confirmation, then call
+    confirm_order only after they clearly say yes.
 
     Args:
-        item_names: The exact names or IDs of the items being purchased.
-        sizes: The required sizes or variants, if applicable.
+        product_ids: The product_id values from search_products results, in order.
+        quantities: Quantity for each product, same order as product_ids.
         delivery_address: The complete delivery address provided by the user.
         contact_number: The user's contact phone number.
+        notes: Sizes, variants, or special instructions (e.g. 'size L, blue').
+
+    Returns:
+        A dictionary with the order summary (items, unit prices, total) to relay.
+    """
+    # Stub — real logic is in _execute_tool (validates products, computes total, stores draft)
+    return {}
+
+
+def confirm_order() -> dict:
+    """Place the order previously prepared with prepare_order. Call ONLY after the user explicitly confirms (e.g. 'yes', 'haan', 'confirm').
 
     Returns:
         A dictionary containing the order status and order number.
     """
-    # Stub — real logic is in _execute_tool → Supabase customers + orders INSERT
+    # Stub — real logic is in _execute_tool → Supabase customers/orders/order_items
     return {}
 
 
 def check_order_status(order_number: str) -> dict:
-    """Check the current status of an existing order by its order number.
+    """Check the current status of one of THIS customer's existing orders by order number.
 
     Args:
         order_number: The order number to look up (e.g. 'ORD-A1B2C3D4').
@@ -69,10 +91,12 @@ def check_order_status(order_number: str) -> dict:
 
 
 def send_product_image(image_url: str) -> dict:
-    """Send a product image physically to the user's chat screen. Use this when the user wants to see an item.
+    """Send a product image to the user's chat screen. Use this when the user wants to see an item.
+
+    Only image_url values that came back from search_products results are allowed.
 
     Args:
-        image_url: The direct URL of the image you want to send.
+        image_url: The image_url field of a product from search_products results.
 
     Returns:
         Status indicating if the image was successfully dispatched.

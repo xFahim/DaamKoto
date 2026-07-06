@@ -6,7 +6,46 @@ from app.services.reply_context import store_mid
 
 logger = get_logger(__name__)
 
-GRAPH_API_URL = "https://graph.facebook.com/v18.0/me/messages"
+# Matches the Graph API version used by the tormoose dashboard token exchange.
+GRAPH_API_URL = "https://graph.facebook.com/v22.0/me/messages"
+
+# Facebook rejects text messages longer than 2000 characters.
+MAX_MESSAGE_CHARS = 2000
+
+# Shared client — connection pooling instead of a new TLS handshake per send.
+_http_client = httpx.AsyncClient(timeout=10.0)
+
+
+def split_message(text: str, limit: int = MAX_MESSAGE_CHARS) -> list[str]:
+    """Split a long message into Facebook-sized chunks.
+
+    Prefers paragraph breaks, then line breaks, then sentence ends, and only
+    hard-cuts when a single unbroken run exceeds the limit.
+    """
+    text = text.strip()
+    if len(text) <= limit:
+        return [text] if text else []
+
+    chunks: list[str] = []
+    remaining = text
+    separators = ["\n\n", "\n", ". ", "! ", "? ", " "]
+
+    while len(remaining) > limit:
+        window = remaining[:limit]
+        cut = -1
+        for sep in separators:
+            idx = window.rfind(sep)
+            if idx > 0:
+                cut = idx + len(sep)
+                break
+        if cut <= 0:
+            cut = limit  # single unbroken run — hard cut
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+    return [c for c in chunks if c]
 
 
 class MessagingService:
@@ -28,8 +67,7 @@ class MessagingService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(GRAPH_API_URL, params=params, json=payload)
+            await _http_client.post(GRAPH_API_URL, params=params, json=payload)
         except Exception as e:
             # Non-critical — don't fail the whole flow for a typing indicator
             logger.debug(f"Failed to send typing indicator: {e}")
@@ -39,40 +77,53 @@ class MessagingService:
         """
         Send a text message to a Facebook Messenger user.
 
+        Messages over Facebook's 2000-char limit are split on natural
+        boundaries and sent sequentially.
+
         Args:
             recipient_id: The Facebook user ID to send the message to
             message_text: The text content of the message
             access_token: The Facebook page access token for this tenant
 
         Returns:
-            True if the message was sent successfully, False otherwise
+            True if every chunk was sent successfully, False otherwise
         """
-        params = {"access_token": access_token}
-        payload = {
-            "recipient": {"id": recipient_id},
-            "message": {"text": message_text},
-        }
+        chunks = split_message(message_text)
+        if not chunks:
+            return True
+        if len(chunks) > 1:
+            logger.info(f"Message to {recipient_id} split into {len(chunks)} chunks")
 
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(GRAPH_API_URL, params=params, json=payload)
+        params = {"access_token": access_token}
+        all_ok = True
+
+        for chunk in chunks:
+            payload = {
+                "recipient": {"id": recipient_id},
+                "message": {"text": chunk},
+            }
+            try:
+                response = await _http_client.post(GRAPH_API_URL, params=params, json=payload)
                 if response.status_code == 200:
                     # Store bot reply mid → text for reply-to resolution
                     resp_data = response.json()
                     bot_mid = resp_data.get("message_id")
                     if bot_mid:
-                        store_mid(bot_mid, message_text)
+                        store_mid(bot_mid, chunk)
                     logger.debug(f"Message delivered to {recipient_id}")
-                    return True
                 else:
                     logger.error(
                         f"Failed to send message to {recipient_id}. "
                         f"Status: {response.status_code}, Response: {response.text}"
                     )
-                    return False
-        except Exception as e:
-            logger.error(f"Error sending message to {recipient_id}: {e}")
-            return False
+                    all_ok = False
+                    break  # don't send later chunks out of order after a failure
+            except Exception as e:
+                logger.error(f"Error sending message to {recipient_id}: {e}")
+                all_ok = False
+                break
+
+        return all_ok
 
     @staticmethod
     async def send_image(recipient_id: str, image_url: str, access_token: str) -> bool:
@@ -97,21 +148,20 @@ class MessagingService:
                 }
             }
         }
-        
+
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(GRAPH_API_URL, params=params, json=payload)
-                if response.status_code == 200:
-                    # Store bot image mid → description for reply-to resolution
-                    resp_data = response.json()
-                    bot_mid = resp_data.get("message_id")
-                    if bot_mid:
-                        store_mid(bot_mid, f"[Bot sent a product image: {image_url}]")
-                    logger.debug(f"Image delivered to {recipient_id}")
-                    return True
-                else:
-                    logger.error(f"Failed to send image to {recipient_id}. Status: {response.status_code}, Response: {response.text}")
-                    return False
+            response = await _http_client.post(GRAPH_API_URL, params=params, json=payload)
+            if response.status_code == 200:
+                # Store bot image mid → description for reply-to resolution
+                resp_data = response.json()
+                bot_mid = resp_data.get("message_id")
+                if bot_mid:
+                    store_mid(bot_mid, f"[Bot sent a product image: {image_url}]")
+                logger.debug(f"Image delivered to {recipient_id}")
+                return True
+            else:
+                logger.error(f"Failed to send image to {recipient_id}. Status: {response.status_code}, Response: {response.text}")
+                return False
         except Exception as e:
             logger.error(f"Error sending image to {recipient_id}: {e}")
             return False

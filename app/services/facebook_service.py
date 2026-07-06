@@ -3,7 +3,7 @@
 from cachetools import TTLCache
 from app.core.config import settings
 from app.core.logging_config import get_logger
-from app.core.tenant_context import resolve_tenant, TenantNotFoundError
+from app.core.tenant_context import resolve_tenant, TenantNotFoundError, TenantInactiveError
 from app.schemas.facebook import FacebookWebhookPayload
 from app.services.handlers.message_router import message_router
 
@@ -55,18 +55,24 @@ class FacebookService:
         for entry in payload.entry:
             # Resolve tenant from bot_settings using Facebook page ID
             try:
-                tenant = await resolve_tenant(entry.id)
+                page_tenant = await resolve_tenant(entry.id)
             except TenantNotFoundError:
                 logger.error(
                     f"No bot_settings row for facebook_page_id={entry.id} — "
                     f"skipping all messages in this entry"
                 )
                 continue
+            except TenantInactiveError:
+                logger.info(
+                    f"Bot for facebook_page_id={entry.id} is inactive — "
+                    f"silently skipping {len(entry.messaging)} event(s)"
+                )
+                continue
 
             for messaging in entry.messaging:
                 sender_id = messaging.sender.id
-                # Stamp the sender_id on the tenant context for this message
-                tenant.sender_id = sender_id
+                # Derive a per-message immutable context stamped with this sender
+                tenant = page_tenant.for_sender(sender_id)
 
                 # Process message events
                 if messaging.message:

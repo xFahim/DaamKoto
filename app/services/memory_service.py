@@ -133,10 +133,16 @@ def _dict_to_openai(d: dict) -> dict | None:
 
 
 class MemoryService:
+    """Keys are conversation keys: '{shop_id}:{sender_psid}'."""
 
     def get_history(self, sender_id: str) -> list[dict]:
         """Return the internal dict-based conversation history."""
         return list(_cache.get(sender_id, []))
+
+    def seed_history(self, sender_id: str, history: list[dict]) -> None:
+        """Initialize memory from a rehydrated DB transcript (no-op if already populated)."""
+        if history and sender_id not in _cache:
+            _cache[sender_id] = list(history)
 
     def get_gemini_history(self, sender_id: str) -> list:
         """Return history converted to Gemini types.Content objects."""

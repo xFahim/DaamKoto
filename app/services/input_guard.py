@@ -6,10 +6,12 @@ Covers:
   - ASCII control character injection         → stripped then re-evaluated
   - Unicode null / invisible character abuse  → stripped
   - Oversized messages (payload bombing)      → reject with user feedback
-  - Rapid-fire spam (rate limiting)           → reject with user feedback
-  - Prompt injection attempts                 → sanitised text passed through
-                                               (Gemini system prompt is authoritative;
-                                                we still strip the most obvious patterns)
+  - Rapid-fire spam (rate limiting)           → reject; user notified ONCE per window
+  - Prompt injection attempts                 → detected and logged, text passed
+                                               through UNCHANGED (the system prompt
+                                               is the real defence — deleting phrases
+                                               mid-sentence corrupts legitimate
+                                               messages like 'can this act as a raincoat?')
 
 All operations are synchronous in-memory — no I/O, safe to call without await.
 """
@@ -17,6 +19,9 @@ All operations are synchronous in-memory — no I/O, safe to call without await.
 import re
 import time
 from app.core.config import settings
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # ── Regex patterns compiled once at import time ────────────────────────────
 
@@ -25,24 +30,22 @@ from app.core.config import settings
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 # Unicode categories that are invisible / zero-width and serve no legitimate purpose:
-#   \u200b–\u200f  zero-width spaces/joiners
-#   \u202a–\u202e  bidirectional overrides (can be used to obscure intent)
+#   \u200b-\u200f  zero-width spaces/joiners
+#   \u202a-\u202e  bidirectional overrides (can be used to obscure intent)
 #   \ufeff         BOM
 #   \u00ad         soft hyphen (invisible)
 _INVISIBLE_UNICODE = re.compile(
     r"[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]"
 )
 
-# Crude prompt-injection signal phrases. We don't block on these — we strip the
-# phrase and pass the cleaned text, because Gemini's system prompt is the real
-# defence. Stripping makes logs cleaner and reduces token waste.
+# Crude prompt-injection signal phrases — English-only, so they are a
+# monitoring signal, not a defence. We LOG matches for observability but never
+# mutate the user's text; the system prompt and server-side tool guards are
+# the actual protection.
 _INJECTION_PATTERNS = re.compile(
     r"(ignore\s+(all\s+)?(?:previous\s+)?instructions?|"
-    r"you\s+are\s+now\s+(?:a\s+)?|"
     r"forget\s+(?:all\s+)?(?:your\s+)?instructions?|"
     r"system\s*prompt|"
-    r"disregard\s+(?:all\s+)?(?:previous\s+)?|"
-    r"act\s+as\s+(?:if\s+you\s+are\s+|a\s+)?|"
     r"jailbreak|"
     r"dan\s+mode)",
     re.IGNORECASE,
@@ -60,18 +63,19 @@ class InputGuard:
     """
 
     def __init__(self) -> None:
-        # sender_id -> (window_start: float, count: int)
-        self._windows: dict[str, tuple[float, int]] = {}
+        # sender_id -> (window_start: float, count: int, notified: bool)
+        self._windows: dict[str, tuple[float, int, bool]] = {}
 
     def check(self, sender_id: str, text: str) -> tuple[str, str]:
         """
         Validate and clean a single incoming message.
 
         Returns one of:
-          ("ok",           cleaned_text)   — pass through to batcher
-          ("silent_drop",  "")             — ignore silently (empty/whitespace)
-          ("reject",       "too_long")     — message exceeded max length
-          ("reject",       "rate_limited") — sender exceeded message rate
+          ("ok",           cleaned_text)          — pass through to batcher
+          ("silent_drop",  "")                    — ignore silently (empty/whitespace)
+          ("reject",       "too_long")            — message exceeded max length
+          ("reject",       "rate_limited_notify") — rate limited; tell the user (once per window)
+          ("reject",       "rate_limited_silent") — rate limited; drop without replying
         """
         # ── Stage 1: basic cleaning ────────────────────────────────────────
 
@@ -92,16 +96,19 @@ class InputGuard:
         if not cleaned:
             return "silent_drop", ""
 
-        # ── Stage 2: strip prompt-injection phrases ────────────────────────
-        # Gemini's system prompt is the real defence; this just keeps logs clean.
-        cleaned = _INJECTION_PATTERNS.sub("", cleaned).strip()
-        if not cleaned:
-            return "silent_drop", ""
+        # ── Stage 2: detect (don't mutate) prompt-injection phrases ────────
+        match = _INJECTION_PATTERNS.search(cleaned)
+        if match:
+            logger.warning(
+                f"[{sender_id}] ⚠️ Possible prompt-injection phrase detected: "
+                f"\"{match.group(0)}\" — passing through unchanged"
+            )
 
         # ── Stage 3: rate limit — consume a slot before length check so that
         #    deliberately oversized messages also burn the rate budget ─────
-        if not self._try_count(sender_id):
-            return "reject", "rate_limited"
+        allowed, should_notify = self._try_count(sender_id)
+        if not allowed:
+            return "reject", "rate_limited_notify" if should_notify else "rate_limited_silent"
 
         # ── Stage 4: length check ──────────────────────────────────────────
         if len(cleaned) > settings.max_message_length:
@@ -111,31 +118,32 @@ class InputGuard:
 
     # ── Private helpers ────────────────────────────────────────────────────
 
-    def _try_count(self, sender_id: str) -> bool:
+    def _try_count(self, sender_id: str) -> tuple[bool, bool]:
         """
         Attempt to consume one rate-limit slot for sender_id.
-        Returns True if allowed, False if the window is exhausted.
 
-        Uses a fixed window: the counter resets when the window duration has
-        elapsed since the first message in that window.
+        Returns (allowed, should_notify). should_notify is True exactly once
+        per exhausted window, so the bot doesn't spam "slow down" replies at
+        someone pasting many messages.
         """
         now = time.monotonic()
         window_secs: float = settings.rate_limit_window
         limit: int = settings.rate_limit_messages
 
         if sender_id in self._windows:
-            start, count = self._windows[sender_id]
+            start, count, notified = self._windows[sender_id]
             if now - start >= window_secs:
                 # Window expired — fresh window starting now
-                self._windows[sender_id] = (now, 1)
-                return True
+                self._windows[sender_id] = (now, 1, False)
+                return True, False
             if count >= limit:
-                return False
-            self._windows[sender_id] = (start, count + 1)
-            return True
+                self._windows[sender_id] = (start, count, True)
+                return False, not notified
+            self._windows[sender_id] = (start, count + 1, notified)
+            return True, False
 
-        self._windows[sender_id] = (now, 1)
-        return True
+        self._windows[sender_id] = (now, 1, False)
+        return True, False
 
 
 input_guard = InputGuard()
