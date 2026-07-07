@@ -145,7 +145,7 @@ free-tier quota (~100 items/min).
 | `products` | search RPC, prepare_order validation, embedding webhook |
 | `customers` | persistence (get_or_create), profile context, confirm_order |
 | `orders` + `order_items` | confirm_order (INSERT), check_order_status |
-| `threads` + `messages` | conversation persistence + rehydration |
+| `threads` + `messages` | conversation persistence + rehydration. Live enums (Supabase-only, not in repo SQL): `thread_status` = 'bot_active' (default) \| 'closed' — no 'open'; `sender_type` = 'customer' \| 'bot' \| 'human' — no 'agent' |
 
 ## Known Constraints
 

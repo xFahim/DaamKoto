@@ -5,6 +5,7 @@ import asyncio
 from app.core.logging_config import get_logger
 from app.core.tenant_context import TenantContext
 from app.services.agent_service import agent_service
+from app.services.memory_service import memory_service
 from app.services.messaging_service import messaging_service
 from app.services.persistence_service import persistence_service
 from app.services.tenant_config import get_fallback_message
@@ -26,15 +27,24 @@ class TextHandler:
         Pass the message to the central Agent Service, get the reply, and send it.
         """
         try:
-            # Show typing indicator immediately
-            await messaging_service.send_typing_on(sender_id, access_token=tenant.page_access_token)
-
             # Persist the user's message for the dashboard transcript (fire-and-forget)
             transcript_text = message_text
             if image_urls:
                 suffix = "\n".join(f"[image] {u}" for u in image_urls)
                 transcript_text = f"{transcript_text}\n{suffix}".strip()
             persistence_service.log_message_bg(tenant, "customer", transcript_text)
+
+            # Human takeover: if an agent owns this thread from the dashboard
+            # (thread_status = 'human_active'), the bot logs and stays silent.
+            # Memory is dropped so the handback rehydrates from the DB and the
+            # bot sees what the human agent said while it was muted.
+            if await persistence_service.is_human_active(tenant.shop_id, sender_id):
+                memory_service.clear_history(f"{tenant.shop_id}:{sender_id}")
+                logger.info(f"[{sender_id}] 🙋 Human agent active — bot staying silent")
+                return
+
+            # Show typing indicator
+            await messaging_service.send_typing_on(sender_id, access_token=tenant.page_access_token)
 
             # Let the agent handle the entire multi-turn logic
             reply = await agent_service.process(sender_id, message_text, image_urls=image_urls, tenant=tenant)

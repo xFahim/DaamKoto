@@ -23,6 +23,9 @@ logger = get_logger(__name__)
 _customer_cache: TTLCache = TTLCache(maxsize=2000, ttl=600)
 # (shop_id, customer_id) -> thread_id
 _thread_cache: TTLCache = TTLCache(maxsize=2000, ttl=600)
+# (shop_id, psid) -> bool: is a human agent handling this thread right now?
+# Short TTL so a dashboard "Take Over" click silences the bot within ~20s.
+_takeover_cache: TTLCache = TTLCache(maxsize=2000, ttl=20)
 
 
 class PersistenceService:
@@ -70,7 +73,11 @@ class PersistenceService:
         return customer_id
 
     async def get_or_create_thread(self, shop_id: str, customer_id: str) -> str:
-        """Return the open thread for this customer, creating one if needed."""
+        """Return the active thread for this customer, creating one if needed.
+
+        Live thread_status enum: 'bot_active' (default) | 'closed' — there is
+        no 'open'. Reuse any non-closed thread.
+        """
         cache_key = (shop_id, customer_id)
         cached = _thread_cache.get(cache_key)
         if cached:
@@ -81,7 +88,7 @@ class PersistenceService:
             .select("id") \
             .eq("shop_id", shop_id) \
             .eq("customer_id", customer_id) \
-            .eq("status", "open") \
+            .neq("status", "closed") \
             .order("updated_at", desc=True) \
             .limit(1) \
             .execute()
@@ -92,13 +99,50 @@ class PersistenceService:
             insert = await supabase.table("threads").insert({
                 "shop_id": shop_id,
                 "customer_id": customer_id,
-                "status": "open",
+                "status": "bot_active",
             }).execute()
             thread_id = insert.data[0]["id"]
             logger.info(f"Thread created for customer={customer_id} (shop={shop_id})")
 
         _thread_cache[cache_key] = thread_id
         return thread_id
+
+    async def is_human_active(self, shop_id: str, psid: str) -> bool:
+        """True if a human agent has taken over this customer's thread
+        (thread_status = 'human_active', set from the tormoose dashboard).
+
+        The bot must then log messages but stay silent. Fails OPEN (bot
+        keeps replying) — a DB hiccup shouldn't mute every conversation.
+        """
+        cache_key = (shop_id, psid)
+        cached = _takeover_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        human_active = False
+        try:
+            supabase = await get_supabase()
+            cust = await supabase.table("customers") \
+                .select("id") \
+                .eq("shop_id", shop_id) \
+                .eq("messenger_psid", psid) \
+                .limit(1) \
+                .execute()
+            if cust.data:
+                thread = await supabase.table("threads") \
+                    .select("status") \
+                    .eq("shop_id", shop_id) \
+                    .eq("customer_id", cust.data[0]["id"]) \
+                    .neq("status", "closed") \
+                    .order("updated_at", desc=True) \
+                    .limit(1) \
+                    .execute()
+                human_active = bool(thread.data) and thread.data[0]["status"] == "human_active"
+        except Exception as e:
+            logger.warning(f"[{psid}] Takeover check failed (bot stays on): {e}")
+
+        _takeover_cache[cache_key] = human_active
+        return human_active
 
     def log_message_bg(
         self, tenant: TenantContext, sender_type: str, content: str
@@ -120,7 +164,7 @@ class PersistenceService:
     async def _log_message(
         self, tenant: TenantContext, sender_type: str, content: str
     ) -> None:
-        """Write one message row (sender_type: 'customer' | 'bot' | 'agent')."""
+        """Write one message row (live sender_type enum: 'customer' | 'bot' | 'human')."""
         customer_id = await self.get_or_create_customer(tenant.shop_id, tenant.sender_id)
         thread_id = await self.get_or_create_thread(tenant.shop_id, customer_id)
 
@@ -183,7 +227,7 @@ class PersistenceService:
             for m in reversed(msgs.data):  # oldest first
                 role = "user" if m["sender_type"] == "customer" else "model"
                 text = m["content"]
-                if m["sender_type"] == "agent":
+                if m["sender_type"] == "human":
                     text = f"[Human agent replied]: {text}"
                 history.append({"role": role, "parts": [{"type": "text", "text": text}]})
 
