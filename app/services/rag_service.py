@@ -7,6 +7,8 @@ This service handles:
 It does NOT handle LLM response generation — that's the agent's job.
 """
 
+import json
+
 from google.genai import types
 from app.core.dependencies import genai_client, get_supabase
 from app.core.logging_config import get_logger
@@ -16,24 +18,43 @@ logger = get_logger(__name__)
 EMBEDDING_MODEL = "gemini-embedding-2"
 EMBEDDING_DIMENSIONS = 768
 
-# attributes keys worth showing the agent; everything else (sku, currency,
-# marketing copy) is noise that wastes tokens
-_VARIANT_ATTR_KEYS = ("size", "color", "stock", "fabric")
+# Attribute schemas differ per store (clothing has size/stock/fabric, another
+# shop may have voltage/warranty/flavor) — so pass EVERY key to the agent and
+# only bound the size: values truncated, at most _MAX_ATTR_KEYS keys.
+_MAX_ATTR_VALUE_CHARS = 80
+_MAX_ATTR_KEYS = 16
 
 
 def _compact_attributes(attrs) -> dict:
-    """Reduce a product's attributes JSON to the fields the agent needs."""
+    """Bound a product's attributes JSON for the agent without assuming a schema."""
     if not isinstance(attrs, dict):
         return {}
     out = {}
-    for key in _VARIANT_ATTR_KEYS:
-        value = attrs.get(key)
+    for key, value in attrs.items():
         if value is None or value == "":
             continue
-        if isinstance(value, str) and len(value) > 60:
-            value = value[:60] + "…"
-        out[key] = value
+        if key == "additional_images":
+            continue  # exposed at product level as more_image_urls (untruncated)
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        if isinstance(value, str) and key != "product_url" and len(value) > _MAX_ATTR_VALUE_CHARS:
+            value = value[:_MAX_ATTR_VALUE_CHARS] + "…"
+        out[str(key)] = value
+        if len(out) >= _MAX_ATTR_KEYS:
+            break
     return out
+
+
+def _extra_images(attrs) -> list[str]:
+    """Extra gallery URLs from attributes.additional_images, if the store has them."""
+    if not isinstance(attrs, dict):
+        return []
+    raw = attrs.get("additional_images")
+    if isinstance(raw, str):
+        raw = [u.strip() for u in raw.replace(",", " ").split() if u.strip()]
+    if not isinstance(raw, list):
+        return []
+    return [u for u in raw if isinstance(u, str) and u.startswith("http")][:3]
 
 
 class RagService:
@@ -98,6 +119,7 @@ class RagService:
                     "price": row.get("price"),
                     "description": row.get("description", ""),
                     "image_url": row.get("image_url") or "",
+                    "more_image_urls": [],
                     "all_image_urls": [],
                     "variants": [],
                 })
@@ -106,6 +128,11 @@ class RagService:
                         group["image_url"] = row["image_url"]
                     if row["image_url"] not in group["all_image_urls"]:
                         group["all_image_urls"].append(row["image_url"])
+                # Gallery images from attributes — usable with send_product_image
+                if not group["more_image_urls"]:
+                    extra = _extra_images(row.get("attributes"))
+                    group["more_image_urls"] = extra
+                    group["all_image_urls"].extend(u for u in extra if u not in group["all_image_urls"])
 
                 if len(group["variants"]) >= 12:
                     continue  # runaway safety — no real product has more sizes
