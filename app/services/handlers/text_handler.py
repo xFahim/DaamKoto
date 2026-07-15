@@ -8,7 +8,6 @@ from app.services.agent_service import agent_service
 from app.services.memory_service import memory_service
 from app.services.messaging_service import messaging_service
 from app.services.persistence_service import persistence_service
-from app.services.tenant_config import get_fallback_message
 
 logger = get_logger(__name__)
 
@@ -49,6 +48,12 @@ class TextHandler:
             # Let the agent handle the entire multi-turn logic
             reply = await agent_service.process(sender_id, message_text, image_urls=image_urls, tenant=tenant)
 
+            # Empty reply = internal error already logged upstream. Errors are
+            # NEVER surfaced to the user — stay silent and let them retry.
+            if not reply or not reply.strip():
+                logger.warning(f"[{sender_id}] Agent produced no reply — staying silent (error logged upstream)")
+                return
+
             # Artificial human typing delay (e.g., 50 chars per sec, bounded 1.5s to 4s)
             delay = min(4.0, max(1.5, len(reply) / 50.0))
             await messaging_service.send_typing_on(sender_id, access_token=tenant.page_access_token)
@@ -67,16 +72,8 @@ class TextHandler:
             logger.info(f"[{sender_id}] ✅ Reply sent ({len(reply)} chars)")
 
         except Exception as e:
+            # Errors are logged only — NEVER sent to the user.
             logger.error(f"[{sender_id}] Text handler error: {e}", exc_info=True)
-            try:
-                fallback = await get_fallback_message(tenant.shop_id)
-            except Exception:
-                fallback = "Sorry, I'm having trouble processing your message right now! Please try again later!"
-            await messaging_service.send_message(
-                recipient_id=sender_id,
-                message_text=fallback,
-                access_token=tenant.page_access_token,
-            )
 
 
 text_handler = TextHandler()

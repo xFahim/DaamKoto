@@ -68,12 +68,18 @@ POST /api/v1/webhook → 200 immediately (asyncio background task)
   → MessageBatcher (key = "{shop_id}:{sender_id}")
       → 4s debounce; per-conversation asyncio.Lock serializes processing —
         an in-flight LLM run is never cancelled; later batches queue behind it
-      → 90s processing timeout → tenant fallback message sent
+      → 90s processing timeout → logged, NOTHING sent to the user
   → TextHandler
       → logs user message to Supabase messages (fire-and-forget)
       → AgentService.process() → reply
       → artificial typing delay (1.5–4s) → send → log bot reply
 ```
+
+**Errors are NEVER surfaced to the user** (policy, 2026-07-15): any internal
+failure (LLM error, timeout, handler exception) is logged and the bot stays
+silent — an empty reply from AgentService means "error already logged, send
+nothing". Deliberate guard notices (rate-limit, too-long, unsupported message
+type) still reply, as they are UX, not errors.
 
 ### Agent (AgentService)
 

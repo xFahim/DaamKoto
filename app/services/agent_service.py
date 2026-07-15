@@ -147,6 +147,23 @@ class AgentService:
             self.provider = "gemini"
             logger.info("Agent service initialized — Gemini (gemini-3-flash-preview)")
 
+    @staticmethod
+    async def _download_image(url: str) -> tuple[bytes, str]:
+        """Download a user-sent image (FB CDN) and return (bytes, mime_type).
+
+        Facebook CDN links can redirect, and attachments aren't always JPEG
+        (stickers/screenshots come as PNG/WebP) — trust the response headers.
+        """
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as http_client:
+            response = await http_client.get(url)
+            response.raise_for_status()
+            image_bytes = response.content
+
+        mime_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if not mime_type.startswith("image/"):
+            mime_type = "image/jpeg"
+        return image_bytes, mime_type
+
     # ─────────────────────────────────────────────────────────────────────
     #  Tool execution bridge
     # ─────────────────────────────────────────────────────────────────────
@@ -553,15 +570,14 @@ class AgentService:
         system_instruction = (
             ai_config["system_prompt"] + PLATFORM_RULES + greeting_hint + profile_context
         )
-        fallback_reply = ai_config["fallback_message"]
 
         if self.provider == "openai":
             reply, tokens = await self._process_openai(
-                mem_key, sender_id, message_text, image_urls, tenant, system_instruction, fallback_reply
+                mem_key, sender_id, message_text, image_urls, tenant, system_instruction
             )
         else:
             reply, tokens = await self._process_gemini(
-                mem_key, sender_id, message_text, image_urls, tenant, system_instruction, fallback_reply
+                mem_key, sender_id, message_text, image_urls, tenant, system_instruction
             )
 
         total_ms = (time.perf_counter() - request_start) * 1000
@@ -651,8 +667,10 @@ class AgentService:
         image_urls: list[str] | None,
         tenant: TenantContext,
         system_instruction: str,
-        fallback_reply: str,
     ) -> tuple[str, dict]:
+        """Returns (reply, tokens). An empty reply means an internal error
+        occurred — the caller stays SILENT toward the user (errors are only
+        logged, never surfaced)."""
         from google import genai
         from google.genai import types
 
@@ -660,7 +678,7 @@ class AgentService:
 
         if not self.gemini_client:
             logger.error(f"[{sender_id}] Gemini client not initialized!")
-            return fallback_reply, _zero_tokens
+            return "", _zero_tokens
 
         # 1. Load History (as Gemini Content objects)
         history = memory_service.get_gemini_history(mem_key)
@@ -677,30 +695,27 @@ class AgentService:
                     import tempfile
                     import os
 
-                    async with httpx.AsyncClient(timeout=10.0) as http_client:
-                        response = await http_client.get(url)
-                        response.raise_for_status()
-                        image_bytes = response.content
+                    image_bytes, mime_type = await self._download_image(url)
 
                     # Write to temp file because the SDK upload function requires a valid file path or supported file-like object
-                    temp_file_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}.jpg")
+                    temp_file_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4().hex}.img")
                     with open(temp_file_path, "wb") as f:
                         f.write(image_bytes)
 
-                    uploaded_file = await self.gemini_client.aio.files.upload(
-                        file=temp_file_path,
-                        config={'mime_type': 'image/jpeg'}
-                    )
-
-                    # Cleanup temp
-                    os.remove(temp_file_path)
+                    try:
+                        uploaded_file = await self.gemini_client.aio.files.upload(
+                            file=temp_file_path,
+                            config={'mime_type': mime_type}
+                        )
+                    finally:
+                        os.remove(temp_file_path)
 
                     # Use the Cloud URI so your server's context memory RAM stays tiny!
-                    parts.append(types.Part.from_uri(uri=uploaded_file.uri, mime_type="image/jpeg"))
+                    parts.append(types.Part.from_uri(uri=uploaded_file.uri, mime_type=mime_type))
                     logger.info(f"[{sender_id}] 📷 Uploaded image to Gemini Cloud: {uploaded_file.uri}")
 
                 except Exception as e:
-                    logger.error(f"[{sender_id}] Failed to upload image: {e}")
+                    logger.error(f"[{sender_id}] Failed to upload image: {e}", exc_info=True)
                     parts.append(types.Part.from_text(text="[User attached an image but the system failed to download it]"))
 
         if not parts:
@@ -747,8 +762,7 @@ class AgentService:
                 )
             except Exception as e:
                 logger.error(f"[{sender_id}] Gemini generation failed: {e}", exc_info=True)
-                memory_service.append_content(mem_key, types.Content(role="model", parts=[types.Part.from_text(text=fallback_reply)]))
-                return fallback_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             turns_used += 1
 
@@ -760,13 +774,13 @@ class AgentService:
                 total_completion += c
 
             if not response.candidates:
-                memory_service.append_content(mem_key, types.Content(role="model", parts=[types.Part.from_text(text=fallback_reply)]))
-                return fallback_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                logger.error(f"[{sender_id}] Gemini returned no candidates — staying silent")
+                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             candidate = response.candidates[0]
             if not candidate.content or not candidate.content.parts:
-                memory_service.append_content(mem_key, types.Content(role="model", parts=[types.Part.from_text(text=fallback_reply)]))
-                return fallback_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                logger.error(f"[{sender_id}] Gemini returned empty content — staying silent")
+                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             # Copy content to avoid modifying references and append to history & memory cache
             memory_service.append_content(mem_key, candidate.content)
@@ -808,9 +822,8 @@ class AgentService:
 
         # Unreachable in practice — the final turn forbids tool calls, so it
         # always returns text above. Kept as a safety net.
-        logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS})")
-        memory_service.append_content(mem_key, types.Content(role="model", parts=[types.Part.from_text(text=fallback_reply)]))
-        return fallback_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+        logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS}) — staying silent")
+        return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
     # ─────────────────────────────────────────────────────────────────────
     #  OpenAI path (same logic, different SDK)
@@ -824,15 +837,17 @@ class AgentService:
         image_urls: list[str] | None,
         tenant: TenantContext,
         system_instruction: str,
-        fallback_reply: str,
     ) -> tuple[str, dict]:
+        """Returns (reply, tokens). An empty reply means an internal error
+        occurred — the caller stays SILENT toward the user (errors are only
+        logged, never surfaced)."""
         from app.core.openai_tools import OPENAI_TOOLS
 
         _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0}
 
         if not self.openai_client:
             logger.error(f"[{sender_id}] OpenAI client not initialized!")
-            return fallback_reply, _zero_tokens
+            return "", _zero_tokens
 
         # 1. Load History (as OpenAI message dicts)
         messages = [{"role": "system", "content": system_instruction}]
@@ -849,16 +864,13 @@ class AgentService:
                 content_parts.append({"type": "text", "text": message_text})
             for url in image_urls:
                 try:
-                    async with httpx.AsyncClient(timeout=10.0) as http_client:
-                        img_resp = await http_client.get(url)
-                        img_resp.raise_for_status()
-                        image_bytes = img_resp.content
+                    image_bytes, mime_type = await self._download_image(url)
                     b64 = base64.b64encode(image_bytes).decode("utf-8")
-                    data_uri = f"data:image/jpeg;base64,{b64}"
+                    data_uri = f"data:{mime_type};base64,{b64}"
                     content_parts.append({"type": "image_url", "image_url": {"url": data_uri}})
-                    logger.info(f"[{sender_id}] 📷 Downloaded image for OpenAI ({len(image_bytes)} bytes)")
+                    logger.info(f"[{sender_id}] 📷 Downloaded image for OpenAI ({len(image_bytes)} bytes, {mime_type})")
                 except Exception as e:
-                    logger.error(f"[{sender_id}] Failed to download image for OpenAI: {e}")
+                    logger.error(f"[{sender_id}] Failed to download image for OpenAI: {e}", exc_info=True)
                     content_parts.append({"type": "text", "text": "[User sent an image but the system failed to download it]"})
             user_msg = {"role": "user", "content": content_parts}
         elif message_text:
@@ -893,11 +905,7 @@ class AgentService:
                 )
             except Exception as e:
                 logger.error(f"[{sender_id}] OpenAI generation failed: {e}", exc_info=True)
-                memory_service.append_content(mem_key, {
-                    "role": "model",
-                    "parts": [{"type": "text", "text": fallback_reply}],
-                })
-                return fallback_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             turns_used += 1
 
@@ -910,11 +918,8 @@ class AgentService:
             assistant_msg = choice.message
 
             if not assistant_msg:
-                memory_service.append_content(mem_key, {
-                    "role": "model",
-                    "parts": [{"type": "text", "text": fallback_reply}],
-                })
-                return fallback_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                logger.error(f"[{sender_id}] OpenAI returned no assistant message — staying silent")
+                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             # Save assistant message to history
             assistant_dict = assistant_msg.model_dump(exclude_none=True)
@@ -942,7 +947,9 @@ class AgentService:
 
             # Check for tool calls
             if not assistant_msg.tool_calls:
-                final = assistant_msg.content or fallback_reply
+                final = assistant_msg.content or ""
+                if not final:
+                    logger.warning(f"[{sender_id}] OpenAI returned empty text with no tool calls — staying silent")
                 return final, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
             tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
@@ -984,12 +991,8 @@ class AgentService:
                 })
 
         # Unreachable in practice — the final turn forbids tool calls. Safety net.
-        logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS})")
-        memory_service.append_content(mem_key, {
-            "role": "model",
-            "parts": [{"type": "text", "text": fallback_reply}],
-        })
-        return fallback_reply, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+        logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS}) — staying silent")
+        return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
 
     @staticmethod
     def _openai_msg_to_parts(msg: dict) -> list[dict]:

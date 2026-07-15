@@ -87,12 +87,13 @@ class FacebookService:
                         _processed_mids[mid] = True
                     # ---------------------------------
 
-                    text = message_dict.get('text', '')
+                    # Image-only messages have text=None — never assume a string
+                    text = message_dict.get('text') or ''
                     att_count = len(message_dict.get('attachments') or [])
                     logger.info(
                         f"[{sender_id}] 📨 Webhook message — "
                         f"mid={mid} | "
-                        f"text=\"{text[:80]}{'…' if len(text or '') > 80 else ''}\" | "
+                        f"text=\"{text[:80]}{'…' if len(text) > 80 else ''}\" | "
                         f"attachments={att_count}"
                     )
 

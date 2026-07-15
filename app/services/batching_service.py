@@ -5,7 +5,6 @@ from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.core.tenant_context import TenantContext
 from app.services.messaging_service import messaging_service
-from app.services.tenant_config import get_fallback_message
 from app.services.handlers.text_handler import text_handler
 
 logger = get_logger(__name__)
@@ -107,17 +106,9 @@ class MessageBatcher:
                     timeout=PROCESSING_TIMEOUT,
                 )
             except asyncio.TimeoutError:
+                # Errors are logged only — NEVER sent to the user. The typing
+                # indicator expires on its own within ~20s.
                 logger.error(f"[{sender_id}] Batch processing timed out after {PROCESSING_TIMEOUT}s")
-                # Don't leave the user staring at a typing indicator forever
-                try:
-                    fallback = await get_fallback_message(tenant.shop_id)
-                    await messaging_service.send_message(
-                        recipient_id=sender_id,
-                        message_text=fallback,
-                        access_token=tenant.page_access_token,
-                    )
-                except Exception as notify_err:
-                    logger.error(f"[{sender_id}] Timeout fallback send failed: {notify_err}")
             except Exception as e:
                 logger.error(f"[{sender_id}] Batch processing error: {e}", exc_info=True)
 
