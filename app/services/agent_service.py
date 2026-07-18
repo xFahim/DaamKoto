@@ -738,7 +738,7 @@ class AgentService:
                         os.remove(temp_file_path)
 
                     # Use the Cloud URI so your server's context memory RAM stays tiny!
-                    parts.append(types.Part.from_uri(uri=uploaded_file.uri, mime_type=mime_type))
+                    parts.append(types.Part.from_uri(file_uri=uploaded_file.uri, mime_type=mime_type))
                     logger.info(f"[{sender_id}] 📷 Uploaded image to Gemini Cloud: {uploaded_file.uri}")
 
                 except Exception as e:

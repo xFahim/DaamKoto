@@ -63,7 +63,7 @@ def _dict_to_gemini(d: dict):
         elif ptype == "function_response":
             parts.append(types.Part.from_function_response(name=p["name"], response=p["response"]))
         elif ptype == "file_data":
-            parts.append(types.Part.from_uri(uri=p["uri"], mime_type=p.get("mime_type", "image/jpeg")))
+            parts.append(types.Part.from_uri(file_uri=p["uri"], mime_type=p.get("mime_type", "image/jpeg")))
         else:
             parts.append(types.Part.from_text(text="[unsupported]"))
 

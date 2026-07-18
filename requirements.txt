@@ -2,7 +2,7 @@ fastapi>=0.115.0
 uvicorn[standard]
 python-multipart
 httpx
-google-genai
+google-genai>=1.56.0,<2
 supabase>=2.15.0
 python-dotenv
 pydantic
