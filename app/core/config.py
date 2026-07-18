@@ -14,7 +14,13 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_service_role_key: str
     llm_provider: str = "gemini"  # "gemini" or "openai"
-    message_batch_timeout: float = 4
+    # Agent models (override via OPENAI_MODEL / GEMINI_MODEL env vars).
+    # Both verified available on the live keys 2026-07-15.
+    openai_model: str = "gpt-5.4-mini"
+    gemini_model: str = "gemini-3.5-flash"
+    # Debounce window (seconds) for combining rapid multi-message bursts into
+    # one agent run. Resets on every new message from the sender.
+    message_batch_timeout: float = 8
     conversation_ttl: int = 600
     conversation_max_turns: int = 5
     max_message_length: int = 500       # chars per individual message; override via MAX_MESSAGE_LENGTH

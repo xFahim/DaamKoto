@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 DaamKoto is a **multi-tenant SaaS** Facebook Messenger e-commerce chatbot platform. It combines:
 - **FastAPI** webhook server for Facebook Messenger (multi-page support)
 - **Supabase** (pgvector) for product storage, orders, customers, threads/messages, and vector similarity search
-- **LLM providers**: OpenAI (`gpt-5-mini`, current `LLM_PROVIDER`) or Google GenAI (`gemini-3-flash-preview`); embeddings always via `gemini-embedding-2` (768-dim)
+- **LLM providers**: OpenAI (default `gpt-5.4-mini`, current `LLM_PROVIDER`) or Google GenAI (default `gemini-3.5-flash`); agent models are env-overridable via `OPENAI_MODEL` / `GEMINI_MODEL`; embeddings always via `gemini-embedding-2` (768-dim)
 
 Sibling repos (same parent folder, same Supabase project):
 - `../tormoose` — Next.js merchant dashboard (Vercel). Owns auth, FB OAuth token exchange, bot settings UI.
@@ -66,7 +66,7 @@ POST /api/v1/webhook → 200 immediately (asyncio background task)
       → InputGuard: control/invisible char strip, injection DETECTION (logs,
         never mutates text), fixed-window rate limit (notifies user once/window)
   → MessageBatcher (key = "{shop_id}:{sender_id}")
-      → 4s debounce; per-conversation asyncio.Lock serializes processing —
+      → 8s debounce (message_batch_timeout, resets per message); per-conversation asyncio.Lock serializes processing —
         an in-flight LLM run is never cancelled; later batches queue behind it
       → 90s processing timeout → logged, NOTHING sent to the user
   → TextHandler

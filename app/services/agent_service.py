@@ -63,6 +63,16 @@ PLATFORM_RULES = (
     "- If the requested variant is missing or out of stock, say so honestly and offer the ones in stock.\n"
     "- Don't recite stock numbers unless asked; just treat stock 0 as unavailable.\n\n"
 
+    "## WHEN THE CUSTOMER SENDS A PHOTO\n"
+    "- First work out WHY they sent it — the photo and any text around it are ONE request.\n"
+    "- If it shows a product (clothing, accessory, anything sellable): identify it precisely "
+    "(item type, color, print/design, notable details) and call 'search_products' with that description. "
+    "Then show the closest match and be honest about whether it's the exact item or just similar.\n"
+    "- If they sent a photo with text like 'ache eta?' or 'do you have this' — the photo IS the product they mean. Search for it.\n"
+    "- If it's a screenshot (an order, payment, or chat): read what's in it and respond to THAT — don't search the catalog.\n"
+    "- If the photo is unrelated to shopping (meme, selfie, random picture): react warmly in one short line, then steer back to how you can help.\n"
+    "- If you genuinely can't tell what they want, ask ONE short question instead of guessing.\n\n"
+
     "## IMAGE RULES\n"
     "- NEVER paste image URLs in your text. The user can't click image links on Messenger.\n"
     "- Use the 'send_product_image' tool with the image_url from search results.\n"
@@ -140,21 +150,33 @@ class AgentService:
             if not settings.openai_api_key:
                 raise ValueError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
             self.openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
-            logger.info("Agent service initialized — OpenAI (gpt-5-mini)")
+            logger.info(f"Agent service initialized — OpenAI ({settings.openai_model})")
         else:
             from app.core.dependencies import genai_client
             self.gemini_client = genai_client
             self.provider = "gemini"
-            logger.info("Agent service initialized — Gemini (gemini-3-flash-preview)")
+            logger.info(f"Agent service initialized — Gemini ({settings.gemini_model})")
 
-    @staticmethod
-    async def _download_image(url: str) -> tuple[bytes, str]:
+    # FB CDN 403s the default python-httpx User-Agent from datacenter IPs
+    # (works from residential IPs, fails on Railway) — send browser-like headers.
+    _IMAGE_FETCH_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+
+    @classmethod
+    async def _download_image(cls, url: str) -> tuple[bytes, str]:
         """Download a user-sent image (FB CDN) and return (bytes, mime_type).
 
         Facebook CDN links can redirect, and attachments aren't always JPEG
         (stickers/screenshots come as PNG/WebP) — trust the response headers.
         """
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as http_client:
+        async with httpx.AsyncClient(
+            timeout=15.0, follow_redirects=True, headers=cls._IMAGE_FETCH_HEADERS
+        ) as http_client:
             response = await http_client.get(url)
             response.raise_for_status()
             image_bytes = response.content
@@ -688,6 +710,11 @@ class AgentService:
         parts = []
         if message_text:
             parts.append(types.Part.from_text(text=message_text))
+        elif image_urls:
+            # No text with the photo — nudge the model to infer intent
+            parts.append(types.Part.from_text(
+                text="[The customer sent the following photo(s) with no text — infer their intent using the photo rules.]"
+            ))
 
         if image_urls:
             for url in image_urls:
@@ -756,7 +783,7 @@ class AgentService:
             logger.debug(f"[{sender_id}] Gemini agent loop — turn {turn + 1}/{MAX_TURNS}")
             try:
                 response = await self.gemini_client.aio.models.generate_content(
-                    model="gemini-3-flash-preview",
+                    model=settings.gemini_model,
                     contents=history,
                     config=final_turn_config if is_final_turn else config
                 )
@@ -862,6 +889,12 @@ class AgentService:
             content_parts = []
             if message_text:
                 content_parts.append({"type": "text", "text": message_text})
+            else:
+                # No text with the photo — nudge the model to infer intent
+                content_parts.append({
+                    "type": "text",
+                    "text": "[The customer sent the following photo(s) with no text — infer their intent using the photo rules.]",
+                })
             for url in image_urls:
                 try:
                     image_bytes, mime_type = await self._download_image(url)
@@ -896,7 +929,7 @@ class AgentService:
             logger.debug(f"[{sender_id}] OpenAI agent loop — turn {turn + 1}/{MAX_TURNS}")
             try:
                 response = await self.openai_client.chat.completions.create(
-                    model="gpt-5-mini",
+                    model=settings.openai_model,
                     messages=messages,
                     tools=OPENAI_TOOLS,
                     # The final turn forbids tools, forcing a text answer instead
