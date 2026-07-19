@@ -23,6 +23,7 @@ from app.services.messaging_service import messaging_service
 from app.services.persistence_service import persistence_service
 from app.services.scope_guard import scope_guard, OFFTOPIC_TAG
 from app.services.tenant_config import get_ai_config
+from app.services.usage_service import usage_service
 
 logger = get_logger(__name__)
 
@@ -686,6 +687,23 @@ class AgentService:
 
         total_ms = (time.perf_counter() - request_start) * 1000
 
+        # Token accounting — one llm_usage row per agent run (fire-and-forget;
+        # logged before silence/mute handling so every run is counted).
+        usage_service.log_bg(
+            shop_id=tenant.shop_id,
+            sender_psid=tenant.sender_id,
+            provider=self.provider,
+            model=settings.openai_model if self.provider == "openai" else settings.gemini_model,
+            kind="chat",
+            prompt_tokens=tokens["prompt"],
+            completion_tokens=tokens["completion"],
+            turns=tokens["turns"],
+            tools_used=tokens.get("tools") or [],
+            message_chars=len(message_text or ""),
+            reply_chars=len(reply or ""),
+            latency_ms=int(total_ms),
+        )
+
         # Legacy safety net only — the model is no longer told to self-silence,
         # but if the token ever appears, honor/strip it.
         if reply and SILENT_TOKEN in reply:
@@ -749,27 +767,51 @@ class AgentService:
         if not text_convo.strip():
             return
 
+        shop_id, _, psid = mem_key.partition(":")
         try:
             summary = ""
+            sum_prompt_tokens = sum_completion_tokens = 0
+            summary_model = ""
             if self.provider == "openai" and self.openai_client:
+                summary_model = "gpt-4.1-nano"  # cheapest model for summarization
                 messages = [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": text_convo}
                 ]
                 resp = await self.openai_client.chat.completions.create(
-                    model="gpt-4.1-nano",  # Use cheapest model for summarization
+                    model=summary_model,
                     messages=messages,
                 )
                 if resp.choices and resp.choices[0].message.content:
                     summary = resp.choices[0].message.content
+                if getattr(resp, "usage", None):
+                    sum_prompt_tokens = resp.usage.prompt_tokens or 0
+                    sum_completion_tokens = resp.usage.completion_tokens or 0
             elif self.provider == "gemini" and self.gemini_client:
                 from google.genai import types
+                summary_model = "gemini-2.5-flash"  # cheaper model for summarization
                 resp = await self.gemini_client.aio.models.generate_content(
-                    model="gemini-2.5-flash",  # Cheaper model for summarization
+                    model=summary_model,
                     contents=[types.Content(role="user", parts=[types.Part.from_text(text=prompt + "\n\n" + text_convo)])],
                 )
                 if resp.candidates and resp.candidates[0].content.parts:
                     summary = "\n".join([p.text for p in resp.candidates[0].content.parts if p.text])
+                if getattr(resp, "usage_metadata", None):
+                    sum_prompt_tokens = resp.usage_metadata.prompt_token_count or 0
+                    sum_completion_tokens = resp.usage_metadata.candidates_token_count or 0
+
+            if summary_model:
+                usage_service.log_bg(
+                    shop_id=shop_id,
+                    sender_psid=psid,
+                    provider=self.provider,
+                    model=summary_model,
+                    kind="summary",
+                    prompt_tokens=sum_prompt_tokens,
+                    completion_tokens=sum_completion_tokens,
+                    turns=1,
+                    latency_ms=0,
+                )
 
             if summary:
                 logger.info(f"[{sender_id}] Replaced history with summary: {summary}")
@@ -798,7 +840,7 @@ class AgentService:
         from google import genai
         from google.genai import types
 
-        _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0}
+        _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0, "tools": []}
 
         if not self.gemini_client:
             logger.error(f"[{sender_id}] Gemini client not initialized!")
@@ -879,6 +921,16 @@ class AgentService:
         total_prompt = 0
         total_completion = 0
         turns_used = 0
+        tools_used: list[str] = []
+
+        def _usage() -> dict:
+            return {
+                "prompt": total_prompt,
+                "completion": total_completion,
+                "total": total_prompt + total_completion,
+                "turns": turns_used,
+                "tools": tools_used,
+            }
 
         for turn in range(MAX_TURNS):
             is_final_turn = turn == MAX_TURNS - 1
@@ -891,7 +943,7 @@ class AgentService:
                 )
             except Exception as e:
                 logger.error(f"[{sender_id}] Gemini generation failed: {e}", exc_info=True)
-                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return "", _usage()
 
             turns_used += 1
 
@@ -904,12 +956,12 @@ class AgentService:
 
             if not response.candidates:
                 logger.error(f"[{sender_id}] Gemini returned no candidates — staying silent")
-                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return "", _usage()
 
             candidate = response.candidates[0]
             if not candidate.content or not candidate.content.parts:
                 logger.error(f"[{sender_id}] Gemini returned empty content — staying silent")
-                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return "", _usage()
 
             # Copy content to avoid modifying references and append to history & memory cache
             memory_service.append_content(mem_key, candidate.content)
@@ -922,9 +974,10 @@ class AgentService:
                 # Text response generated, break loop and return the text
                 text_parts = [p.text for p in candidate.content.parts if p.text]
                 final_text = "\n".join(text_parts)
-                return final_text, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return final_text, _usage()
 
             logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_calls)} tool(s): {[c.name for c in tool_calls]}")
+            tools_used.extend(c.name for c in tool_calls)
 
             # Execute tools in parallel — tenant context injected, not from LLM args
             tasks = [
@@ -952,7 +1005,7 @@ class AgentService:
         # Unreachable in practice — the final turn forbids tool calls, so it
         # always returns text above. Kept as a safety net.
         logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS}) — staying silent")
-        return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+        return "", _usage()
 
     # ─────────────────────────────────────────────────────────────────────
     #  OpenAI path (same logic, different SDK)
@@ -972,7 +1025,7 @@ class AgentService:
         logged, never surfaced)."""
         from app.core.openai_tools import OPENAI_TOOLS
 
-        _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0}
+        _zero_tokens = {"prompt": 0, "completion": 0, "total": 0, "turns": 0, "tools": []}
 
         if not self.openai_client:
             logger.error(f"[{sender_id}] OpenAI client not initialized!")
@@ -1025,6 +1078,16 @@ class AgentService:
         total_prompt = 0
         total_completion = 0
         turns_used = 0
+        tools_used: list[str] = []
+
+        def _usage() -> dict:
+            return {
+                "prompt": total_prompt,
+                "completion": total_completion,
+                "total": total_prompt + total_completion,
+                "turns": turns_used,
+                "tools": tools_used,
+            }
 
         for turn in range(MAX_TURNS):
             is_final_turn = turn == MAX_TURNS - 1
@@ -1040,7 +1103,7 @@ class AgentService:
                 )
             except Exception as e:
                 logger.error(f"[{sender_id}] OpenAI generation failed: {e}", exc_info=True)
-                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return "", _usage()
 
             turns_used += 1
 
@@ -1054,7 +1117,7 @@ class AgentService:
 
             if not assistant_msg:
                 logger.error(f"[{sender_id}] OpenAI returned no assistant message — staying silent")
-                return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return "", _usage()
 
             # Save assistant message to history
             assistant_dict = assistant_msg.model_dump(exclude_none=True)
@@ -1085,10 +1148,11 @@ class AgentService:
                 final = assistant_msg.content or ""
                 if not final:
                     logger.warning(f"[{sender_id}] OpenAI returned empty text with no tool calls — staying silent")
-                return final, {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+                return final, _usage()
 
             tool_names = [tc.function.name for tc in assistant_msg.tool_calls]
             logger.info(f"[{sender_id}] 🤖 Agent decided to call {len(tool_names)} tool(s): {tool_names}")
+            tools_used.extend(tool_names)
 
             # Execute tools in parallel — tenant context injected, not from LLM args
             tasks = [
@@ -1127,7 +1191,7 @@ class AgentService:
 
         # Unreachable in practice — the final turn forbids tool calls. Safety net.
         logger.warning(f"[{sender_id}] Agent exceeded max turns ({MAX_TURNS}) — staying silent")
-        return "", {"prompt": total_prompt, "completion": total_completion, "total": total_prompt + total_completion, "turns": turns_used}
+        return "", _usage()
 
     @staticmethod
     def _openai_msg_to_parts(msg: dict) -> list[dict]:
