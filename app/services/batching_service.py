@@ -1,6 +1,8 @@
 """Debouncing service that batches rapid sequential text messages per sender."""
 
 import asyncio
+import random
+
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.core.tenant_context import TenantContext
@@ -50,7 +52,8 @@ class MessageBatcher:
         batch = self._pending_items[key]
         logger.debug(
             f"[{sender_id}] Batch updated — {len(batch['texts'])} text(s), "
-            f"{len(batch['image_urls'])} image(s) | debounce={settings.message_batch_timeout}s"
+            f"{len(batch['image_urls'])} image(s) | "
+            f"debounce={settings.message_batch_timeout}-{settings.message_batch_timeout_max}s"
         )
 
         # Reset the debounce timer. Safe: a timer removes itself from _timers
@@ -72,7 +75,12 @@ class MessageBatcher:
     async def _process_batch(self, key: str, sender_id: str, tenant: TenantContext) -> None:
         """Wait for debounce window, then flush batch to TextHandler."""
         try:
-            await asyncio.sleep(settings.message_batch_timeout)
+            # Fresh random window per (re)start so response timing feels human,
+            # not like a fixed-interval machine.
+            await asyncio.sleep(random.uniform(
+                settings.message_batch_timeout,
+                max(settings.message_batch_timeout, settings.message_batch_timeout_max),
+            ))
         except asyncio.CancelledError:
             raise  # Timer reset by new message — leave state alone, new task owns it
 

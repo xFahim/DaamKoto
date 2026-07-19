@@ -26,6 +26,14 @@ DEFAULT_FALLBACK = (
     "Please try again later!"
 )
 
+# Hard caps on merchant-provided text. The dashboard enforces the same
+# limits client-side; these are defense in depth against direct DB writes.
+# The persona is STYLE ONLY — agent_service wraps it under a "merchant style
+# notes" header that platform rules explicitly outrank.
+MAX_PERSONA_CHARS = 1200
+MAX_GREETING_CHARS = 200
+MAX_FALLBACK_CHARS = 200
+
 
 async def get_ai_config(shop_id: str) -> dict:
     """Return {system_prompt, greeting_message, fallback_message} for a shop.
@@ -54,11 +62,11 @@ async def get_ai_config(shop_id: str) -> dict:
         if result and result.data:
             row = result.data
             if row.get("system_prompt"):
-                config["system_prompt"] = row["system_prompt"].strip()
+                config["system_prompt"] = row["system_prompt"].strip()[:MAX_PERSONA_CHARS]
             if row.get("greeting_message"):
-                config["greeting_message"] = row["greeting_message"].strip()
+                config["greeting_message"] = row["greeting_message"].strip()[:MAX_GREETING_CHARS]
             if row.get("fallback_message"):
-                config["fallback_message"] = row["fallback_message"].strip()
+                config["fallback_message"] = row["fallback_message"].strip()[:MAX_FALLBACK_CHARS]
             logger.debug(f"AI config loaded for shop={shop_id}")
     except Exception as e:
         logger.warning(f"ai_configurations lookup failed for shop={shop_id}: {e} — using defaults")

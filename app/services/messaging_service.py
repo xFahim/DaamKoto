@@ -7,7 +7,8 @@ from app.services.reply_context import store_mid
 logger = get_logger(__name__)
 
 # Matches the Graph API version used by the tormoose dashboard token exchange.
-GRAPH_API_URL = "https://graph.facebook.com/v22.0/me/messages"
+GRAPH_API_BASE = "https://graph.facebook.com/v22.0"
+GRAPH_API_URL = f"{GRAPH_API_BASE}/me/messages"
 
 # Facebook rejects text messages longer than 2000 characters.
 MAX_MESSAGE_CHARS = 2000
@@ -71,6 +72,33 @@ class MessagingService:
         except Exception as e:
             # Non-critical — don't fail the whole flow for a typing indicator
             logger.debug(f"Failed to send typing indicator: {e}")
+
+    @staticmethod
+    async def get_profile_name(psid: str, access_token: str) -> str | None:
+        """Fetch the customer's real name from the Graph User Profile API.
+
+        Works for anyone who has messaged the page (pages_messaging grants
+        first_name/last_name access). Best effort: unverified apps or privacy
+        settings can deny it — return None and the dashboard falls back to
+        'Customer XXXXXX'.
+        """
+        try:
+            response = await _http_client.get(
+                f"{GRAPH_API_BASE}/{psid}",
+                params={"fields": "first_name,last_name", "access_token": access_token},
+            )
+            if response.status_code == 200:
+                data = response.json()
+                name = " ".join(
+                    part for part in [data.get("first_name"), data.get("last_name")] if part
+                ).strip()
+                return name or None
+            logger.debug(
+                f"Profile fetch for {psid} returned {response.status_code}: {response.text[:200]}"
+            )
+        except Exception as e:
+            logger.debug(f"Profile fetch for {psid} failed: {e}")
+        return None
 
     @staticmethod
     async def send_message(recipient_id: str, message_text: str, access_token: str) -> bool:

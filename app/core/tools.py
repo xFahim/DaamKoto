@@ -30,10 +30,12 @@ def search_products(query: str) -> list[dict]:
 
 
 def get_company_policy(topic: str) -> str:
-    """Retrieve the store's policies about shipping, returns, operating hours, etc.
+    """Retrieve store info written by the owner: shipping, returns, operating hours,
+    store location/address, about the business, and contact details.
 
     Args:
-        topic: The topic requested (e.g. 'operating hours', 'return policy', 'shipping').
+        topic: The topic requested (e.g. 'operating hours', 'return policy', 'shipping',
+            'location', 'about us', 'contact').
 
     Returns:
         A string containing the relevant store policy information.

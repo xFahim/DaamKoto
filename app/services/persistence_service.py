@@ -26,14 +26,27 @@ _thread_cache: TTLCache = TTLCache(maxsize=2000, ttl=600)
 # (shop_id, psid) -> bool: is a human agent handling this thread right now?
 # Short TTL so a dashboard "Take Over" click silences the bot within ~20s.
 _takeover_cache: TTLCache = TTLCache(maxsize=2000, ttl=20)
+# (shop_id, psid) we already tried a Graph profile-name fetch for. Long TTL:
+# when the app can't read a user's profile (unverified app, privacy), don't
+# re-hit Graph on every customer-cache miss.
+_name_fetch_attempted: TTLCache = TTLCache(maxsize=5000, ttl=6 * 3600)
 
 
 class PersistenceService:
 
     async def get_or_create_customer(
-        self, shop_id: str, psid: str, name: str | None = None
+        self,
+        shop_id: str,
+        psid: str,
+        name: str | None = None,
+        page_access_token: str | None = None,
     ) -> str:
-        """Return the customers.id for this (shop, PSID), creating the row if new."""
+        """Return the customers.id for this (shop, PSID), creating the row if new.
+
+        When a page token is provided, the customer's real name is fetched
+        from the Graph profile API — on creation, and lazily backfilled for
+        rows that predate name fetching. Best effort; never blocks the flow.
+        """
         cache_key = (shop_id, psid)
         cached = _customer_cache.get(cache_key)
         if cached:
@@ -41,7 +54,7 @@ class PersistenceService:
 
         supabase = await get_supabase()
         result = await supabase.table("customers") \
-            .select("id") \
+            .select("id, name") \
             .eq("shop_id", shop_id) \
             .eq("messenger_psid", psid) \
             .limit(1) \
@@ -49,14 +62,26 @@ class PersistenceService:
 
         if result.data:
             customer_id = result.data[0]["id"]
+            # Backfill real names for customers created before profile fetching
+            if not result.data[0].get("name"):
+                fetched = await self._fetch_profile_name(shop_id, psid, page_access_token)
+                if fetched:
+                    try:
+                        await supabase.table("customers").update({"name": fetched}) \
+                            .eq("id", customer_id).execute()
+                        logger.info(f"[{psid}] Customer name backfilled: {fetched}")
+                    except Exception as e:
+                        logger.debug(f"[{psid}] Name backfill write failed: {e}")
         else:
+            if not name:
+                name = await self._fetch_profile_name(shop_id, psid, page_access_token)
             row = {"shop_id": shop_id, "messenger_psid": psid}
             if name:
                 row["name"] = name
             try:
                 insert = await supabase.table("customers").insert(row).execute()
                 customer_id = insert.data[0]["id"]
-                logger.info(f"[{psid}] New customer created (shop={shop_id})")
+                logger.info(f"[{psid}] New customer created (shop={shop_id}, name={name or '—'})")
             except Exception:
                 # Lost an insert race — another task created the row first
                 retry = await supabase.table("customers") \
@@ -71,6 +96,22 @@ class PersistenceService:
 
         _customer_cache[cache_key] = customer_id
         return customer_id
+
+    @staticmethod
+    async def _fetch_profile_name(
+        shop_id: str, psid: str, page_access_token: str | None
+    ) -> str | None:
+        """Graph profile-name lookup, throttled so denied profiles (unverified
+        app, user privacy) aren't re-queried on every cache miss."""
+        if not page_access_token:
+            return None
+        attempt_key = (shop_id, psid)
+        if attempt_key in _name_fetch_attempted:
+            return None
+        _name_fetch_attempted[attempt_key] = True
+
+        from app.services.messaging_service import messaging_service
+        return await messaging_service.get_profile_name(psid, page_access_token)
 
     async def get_or_create_thread(self, shop_id: str, customer_id: str) -> str:
         """Return the active thread for this customer, creating one if needed.
@@ -165,7 +206,9 @@ class PersistenceService:
         self, tenant: TenantContext, sender_type: str, content: str
     ) -> None:
         """Write one message row (live sender_type enum: 'customer' | 'bot' | 'human')."""
-        customer_id = await self.get_or_create_customer(tenant.shop_id, tenant.sender_id)
+        customer_id = await self.get_or_create_customer(
+            tenant.shop_id, tenant.sender_id, page_access_token=tenant.page_access_token
+        )
         thread_id = await self.get_or_create_thread(tenant.shop_id, customer_id)
 
         supabase = await get_supabase()

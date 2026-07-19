@@ -44,6 +44,7 @@ class TenantContext:
     page_access_token: str          # Facebook Graph API token for this page
     facebook_page_id: str           # The numeric Facebook page ID (entry.id)
     sender_id: str = ""             # Messenger PSID — stamped per-message via for_sender()
+    allow_split_replies: bool = False  # Owner toggle: bot may send multi-bubble replies
 
     def for_sender(self, sender_id: str) -> "TenantContext":
         """Return a copy of this context stamped with a specific sender PSID."""
@@ -71,11 +72,24 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
         # Query Supabase
         try:
             supabase = await get_supabase()
-            result = await supabase.table("bot_settings") \
-                .select("shop_id, page_access_token, is_active") \
-                .eq("page_id", facebook_page_id) \
-                .maybe_single() \
-                .execute()
+            try:
+                result = await supabase.table("bot_settings") \
+                    .select("shop_id, page_access_token, is_active, allow_split_replies") \
+                    .eq("page_id", facebook_page_id) \
+                    .maybe_single() \
+                    .execute()
+            except Exception as col_err:
+                # allow_split_replies migration not applied yet — the bot must
+                # keep working, so fall back to the legacy column set.
+                logger.warning(
+                    f"bot_settings select with allow_split_replies failed ({col_err}) — "
+                    "retrying without it. Run the allow_split_replies migration."
+                )
+                result = await supabase.table("bot_settings") \
+                    .select("shop_id, page_access_token, is_active") \
+                    .eq("page_id", facebook_page_id) \
+                    .maybe_single() \
+                    .execute()
         except Exception as e:
             logger.error(f"Supabase query failed for facebook_page_id={facebook_page_id}: {e}")
             raise TenantNotFoundError(f"DB error resolving tenant: {e}") from e
@@ -89,6 +103,7 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
             "shop_id": result.data["shop_id"],
             "page_access_token": result.data["page_access_token"],
             "is_active": bool(result.data.get("is_active")),
+            "allow_split_replies": bool(result.data.get("allow_split_replies")),
         }
         _tenant_cache[facebook_page_id] = cached
         logger.info(
@@ -107,4 +122,5 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
         shop_id=cached["shop_id"],
         page_access_token=cached["page_access_token"],
         facebook_page_id=facebook_page_id,
+        allow_split_replies=cached.get("allow_split_replies", False),
     )

@@ -32,13 +32,13 @@ OPENAI_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_company_policy",
-            "description": "Retrieve the store's policies about shipping, returns, operating hours, etc.",
+            "description": "Retrieve store info written by the owner: shipping, returns, operating hours, store location/address, about the business, and contact details.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "topic": {
                         "type": "string",
-                        "description": "The topic requested (e.g. 'operating hours', 'return policy', 'shipping')."
+                        "description": "The topic requested (e.g. 'operating hours', 'return policy', 'shipping', 'location', 'about us', 'contact')."
                     }
                 },
                 "required": ["topic"]
