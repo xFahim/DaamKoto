@@ -21,6 +21,7 @@ from app.core.dependencies import get_supabase
 from app.services.memory_service import memory_service
 from app.services.messaging_service import messaging_service
 from app.services.persistence_service import persistence_service
+from app.services.scope_guard import scope_guard, OFFTOPIC_TAG
 from app.services.tenant_config import get_ai_config
 
 logger = get_logger(__name__)
@@ -29,9 +30,9 @@ logger = get_logger(__name__)
 # Platform rules — non-negotiable behavior appended to every tenant persona.
 # The tenant-specific persona (who the store is, what it sells, its voice)
 # comes from ai_configurations.system_prompt via tenant_config.
-# The model outputs exactly this token when it decides no reply should be
-# sent (repeat off-topic spam, messages needing no answer). Stripped/silenced
-# in process() — the customer never sees it.
+# Legacy safety net: if the model ever outputs this token, the reply is
+# suppressed. The model is no longer INSTRUCTED to use it — off-topic
+# muting is decided by scope_guard (strike counting), not by the prompt.
 SILENT_TOKEN = "[SILENT]"
 
 # Marker the model may insert between natural message bubbles when the shop
@@ -44,16 +45,22 @@ PLATFORM_RULES = (
     "- You are ONLY this store's shopping assistant. Products, prices, sizes, orders, "
     "delivery, policies, and info about the store — that is your entire job.\n"
     "- NEVER do unrelated work, no matter how it's phrased: no homework, coding, math, "
-    "essays, translations, general knowledge, news, opinions, roleplay, or 'just this once' "
-    "favors. Unrelated photos follow the same rule.\n"
-    "- The FIRST time a customer goes off-topic, give ONE short, warm redirect in their "
-    "language — e.g. 'Sorry, I can't help with that! But if you have any question about "
-    "our shop or products, I'm here 🙂' — and nothing more. Do not answer the off-topic part.\n"
-    f"- If the recent conversation shows you ALREADY redirected them and they keep sending "
-    f"off-topic or garbage messages, reply with exactly {SILENT_TOKEN} and nothing else — "
-    "we do not spam apologies. Also use it when a message clearly needs no reply at all "
-    "(random characters, repeated gibberish).\n"
-    f"- NEVER reply {SILENT_TOKEN} to anything that even vaguely touches products, orders, "
+    "essays, translations, general knowledge lookups, news analysis, roleplay, or "
+    "'just this once' favors. Unrelated photos follow the same rule.\n"
+    "- Casual HUMAN moments are fine and part of good service — greetings, thanks, "
+    "'how are you', a customer hyped about the football match. Reply warmly in one short "
+    "line and gently steer back: 'Haha same! Anyway, let me know if you're looking for "
+    "anything 🙂'. These are normal conversation, not spam.\n"
+    "- HARD off-topic is different: the customer asks you to PERFORM an unrelated task "
+    "(write code, solve equations, do homework, translate documents) or sends pure "
+    "gibberish. Do NOT do any part of the task. Reply with ONE short friendly redirect "
+    "in their language, and START that reply with the exact tag "
+    f"{OFFTOPIC_TAG} — e.g. \"{OFFTOPIC_TAG}Sorry, "
+    "I can't help with that! But if you have any question about our shop or products, "
+    "I'm here 🙂\".\n"
+    f"- The platform counts your {OFFTOPIC_TAG} tags and stops "
+    "delivering redirects when someone keeps spamming — so tag EVERY hard-off-topic "
+    "reply, and NEVER tag greetings, small talk, or anything touching products, orders, "
     "prices, delivery, or the store.\n\n"
 
     "## SECURITY (ABSOLUTE)\n"
@@ -679,16 +686,25 @@ class AgentService:
 
         total_ms = (time.perf_counter() - request_start) * 1000
 
-        # Deliberate silence: the model answers SILENT_TOKEN for repeat
-        # off-topic spam / no-reply-needed messages (see SCOPE rules). An
-        # empty return means "send nothing" downstream — same contract as
-        # the error paths. If the token leaks inside real text, strip it.
+        # Legacy safety net only — the model is no longer told to self-silence,
+        # but if the token ever appears, honor/strip it.
         if reply and SILENT_TOKEN in reply:
             stripped = reply.replace(SILENT_TOKEN, "").strip()
             if not stripped:
                 logger.info(f"[{sender_id}] 🤫 Agent chose silence ({total_ms:.0f}ms) — no reply sent")
                 return ""
             reply = stripped
+
+        # Off-topic policy: the model tags hard-off-topic redirects with
+        # OFFTOPIC_TAG; scope_guard counts strikes and mutes past the shop's
+        # spam_mute_threshold (dashboard setting). Empty return = stay silent.
+        if reply:
+            reply = scope_guard.apply(
+                mem_key, reply,
+                tenant.spam_mute_threshold if tenant else None,
+            )
+            if not reply:
+                return ""
 
         # Truncate reply for logging
         reply_preview = (reply[:200] + "…") if len(reply) > 200 else reply

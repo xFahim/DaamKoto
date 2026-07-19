@@ -45,6 +45,9 @@ class TenantContext:
     facebook_page_id: str           # The numeric Facebook page ID (entry.id)
     sender_id: str = ""             # Messenger PSID — stamped per-message via for_sender()
     allow_split_replies: bool = False  # Owner toggle: bot may send multi-bubble replies
+    # How many hard-off-topic messages still get a polite redirect before the
+    # bot goes quiet (scope_guard). None → platform default.
+    spam_mute_threshold: int | None = None
 
     def for_sender(self, sender_id: str) -> "TenantContext":
         """Return a copy of this context stamped with a specific sender PSID."""
@@ -74,16 +77,19 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
             supabase = await get_supabase()
             try:
                 result = await supabase.table("bot_settings") \
-                    .select("shop_id, page_access_token, is_active, allow_split_replies") \
+                    .select(
+                        "shop_id, page_access_token, is_active, "
+                        "allow_split_replies, spam_mute_threshold"
+                    ) \
                     .eq("page_id", facebook_page_id) \
                     .maybe_single() \
                     .execute()
             except Exception as col_err:
-                # allow_split_replies migration not applied yet — the bot must
-                # keep working, so fall back to the legacy column set.
+                # 20260719 behavior-columns migration not applied yet — the bot
+                # must keep working, so fall back to the legacy column set.
                 logger.warning(
-                    f"bot_settings select with allow_split_replies failed ({col_err}) — "
-                    "retrying without it. Run the allow_split_replies migration."
+                    f"bot_settings select with behavior columns failed ({col_err}) — "
+                    "retrying without them. Run the 20260719_bot_split_replies migration."
                 )
                 result = await supabase.table("bot_settings") \
                     .select("shop_id, page_access_token, is_active") \
@@ -104,6 +110,7 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
             "page_access_token": result.data["page_access_token"],
             "is_active": bool(result.data.get("is_active")),
             "allow_split_replies": bool(result.data.get("allow_split_replies")),
+            "spam_mute_threshold": result.data.get("spam_mute_threshold"),
         }
         _tenant_cache[facebook_page_id] = cached
         logger.info(
@@ -123,4 +130,5 @@ async def resolve_tenant(facebook_page_id: str) -> TenantContext:
         page_access_token=cached["page_access_token"],
         facebook_page_id=facebook_page_id,
         allow_split_replies=cached.get("allow_split_replies", False),
+        spam_mute_threshold=cached.get("spam_mute_threshold"),
     )

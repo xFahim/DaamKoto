@@ -9,6 +9,7 @@ from app.services.agent_service import agent_service, SPLIT_TOKEN
 from app.services.memory_service import memory_service
 from app.services.messaging_service import messaging_service
 from app.services.persistence_service import persistence_service
+from app.services.scope_guard import scope_guard
 
 logger = get_logger(__name__)
 
@@ -73,6 +74,7 @@ class TextHandler:
             # bot sees what the human agent said while it was muted.
             if await persistence_service.is_human_active(tenant.shop_id, sender_id):
                 memory_service.clear_history(f"{tenant.shop_id}:{sender_id}")
+                scope_guard.reset(f"{tenant.shop_id}:{sender_id}")
                 logger.info(f"[{sender_id}] 🙋 Human agent active — bot staying silent")
                 return
 
