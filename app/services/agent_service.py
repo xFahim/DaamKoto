@@ -191,6 +191,12 @@ _order_drafts: TTLCache = TTLCache(maxsize=2000, ttl=900)
 # search_products for this conversation. Blocks prompt-injected/hallucinated URLs.
 _allowed_images: TTLCache = TTLCache(maxsize=2000, ttl=3600)
 
+# Products already surfaced to this conversation by search_products
+# (name/price/sizes). History summarization is text-only and lossy — this is
+# durable ground truth injected via _conversation_state() so the bot never
+# forgets a product it already showed (e.g. adding an earlier polo to an order).
+_recent_products: TTLCache = TTLCache(maxsize=2000, ttl=3600)
+
 # Customer profile snippets, keyed by "{shop_id}:{sender_id}".
 _profile_cache: TTLCache = TTLCache(maxsize=2000, ttl=120)
 
@@ -198,6 +204,54 @@ _profile_cache: TTLCache = TTLCache(maxsize=2000, ttl=120)
 def _conversation_key(tenant: TenantContext) -> str:
     """Memory/draft key. PSIDs are page-scoped, so namespace by shop."""
     return f"{tenant.shop_id}:{tenant.sender_id}"
+
+
+def _conversation_state(mem_key: str) -> str:
+    """Compact durable state appended to the system instruction each run.
+
+    History summarization is text-only and lossy — product facts (exact names,
+    prices) and the pending draft must survive it or the bot re-searches and
+    picks the WRONG product/variant (seen live: Dark Navy pant became Light
+    Navy, a 650 BDT polo became a different 600 BDT one). ~100-150 tokens;
+    typically pays for itself by avoiding redundant search_products turns."""
+    sections = []
+
+    recent = _recent_products.get(mem_key) or []
+    if recent:
+        prods = "; ".join(
+            f"{r['name']} — {r['price']} BDT" + (f" [sizes: {r['sizes']}]" if r.get("sizes") else "")
+            for r in recent
+        )
+        sections.append(
+            "Products ALREADY SHOWN to this customer (trust these names/prices, do not re-quote "
+            f"differently): {prods}. When the customer refers to one ('oi polo ta', 'that pant'), "
+            "it means one of THESE — use its EXACT full name (with color) in search_products to "
+            "get product_ids for ordering. Never substitute a different color/product."
+        )
+
+    draft = _order_drafts.get(mem_key)
+    if draft:
+        items = ", ".join(f"{i['name']} x{i['quantity']}" for i in draft.get("items", []))
+        draft_line = (
+            f"ACTIVE ORDER DRAFT (awaiting confirmation): {items} | total {draft.get('total_amount')} BDT"
+        )
+        if draft.get("delivery_address"):
+            draft_line += f" | deliver to: {draft['delivery_address']}"
+        if draft.get("contact_number"):
+            draft_line += f" | contact: {draft['contact_number']}"
+        draft_line += (
+            ". If the customer ADDS another item, call prepare_order again with ALL items "
+            "(existing draft items + the new one) — a new draft replaces the old one."
+        )
+        sections.append(draft_line)
+
+    if not sections:
+        return ""
+    return (
+        "\n\n[CONVERSATION STATE — trusted server-side data, invisible to the customer:\n"
+        + "\n".join(f"- {s}" for s in sections)
+        + "]"
+    )
 
 
 class AgentService:
@@ -375,6 +429,19 @@ class AgentService:
                 p["description"] = p["description"][:100] + ("..." if len(p["description"]) > 100 else "")
 
         _allowed_images[key] = allowed
+
+        # Record surfaced products so _conversation_state() keeps them alive
+        # across lossy history summarization. Dedupe by name, newest wins.
+        recent = _recent_products.get(key) or []
+        for p in products:
+            sizes = "/".join(
+                str(v.get("size")) for v in (p.get("variants") or []) if v.get("size")
+            )
+            entry = {"name": p.get("name"), "price": p.get("price"), "sizes": sizes}
+            recent = [r for r in recent if r.get("name") != entry["name"]]
+            recent.append(entry)
+        _recent_products[key] = recent[-8:]
+
         return {"products_found": products}
 
     async def _tool_get_company_policy(self, tenant: TenantContext) -> dict:
@@ -722,6 +789,7 @@ class AgentService:
             + (SPLIT_RULES if tenant.allow_split_replies else "")
             + greeting_hint
             + profile_context
+            + _conversation_state(mem_key)
             + (CROSSED_REPLY_NOTE if crossed else "")
         )
 
@@ -781,7 +849,7 @@ class AgentService:
             f"\"{reply_preview}\""
         )
 
-        if len(memory_service.get_history(mem_key)) > settings.summarize_threshold and mem_key not in self._summarizing:
+        if memory_service.visible_len(mem_key) > settings.summarize_threshold and mem_key not in self._summarizing:
             self._summarizing.add(mem_key)
             task = asyncio.create_task(self._summarize_history_task(mem_key, sender_id))
             task.add_done_callback(lambda t, k=mem_key: self._summarizing.discard(k))
@@ -791,7 +859,7 @@ class AgentService:
     async def _summarize_history_task(self, mem_key: str, sender_id: str):
         """Background task to summarize older history to save tokens."""
         history = memory_service.get_history(mem_key)
-        if len(history) <= settings.summarize_threshold:
+        if memory_service.visible_len(mem_key) <= settings.summarize_threshold:
             return
 
         logger.info(f"[{sender_id}] Triggering background history summarization...")
@@ -801,10 +869,17 @@ class AgentService:
         snapshot_len = len(history)
         to_summarize = history[:-keep_last_n]
 
-        # Create a tiny prompt to summarize
-        prompt = "Summarize this conversation concisely. Focus on user intent, missing information, and products discussed. Maximum 3 sentences."
+        # Facts lost here are lost FOREVER (later summaries compound from this
+        # one), so the prompt demands concrete details, not vibes.
+        prompt = (
+            "Summarize this shop conversation in at most 5 sentences. You MUST preserve exactly: "
+            "product names with color, prices, sizes the customer chose or asked about, delivery "
+            "address, phone number, and any pending/confirmed order details. Also note unresolved "
+            "questions. Do not editorialize about what is 'missing' unless the customer was asked for it."
+        )
 
-        # Build text representation of older conversation
+        # Build text representation of older conversation. Tool results carry
+        # the product facts (names/prices) — text parts alone lose them.
         text_convo = ""
         for msg in to_summarize:
             role = msg.get("role", "unknown")
@@ -812,6 +887,21 @@ class AgentService:
             for p in parts:
                 if p.get("type") == "text" and p.get("text"):
                     text_convo += f"{role}: {p['text']}\n"
+                elif p.get("type") == "function_response":
+                    resp = p.get("response") or {}
+                    prods = resp.get("products_found")
+                    if isinstance(prods, list) and prods:
+                        names = ", ".join(
+                            f"{x.get('name')} ({x.get('price')} BDT)"
+                            for x in prods[:5] if isinstance(x, dict)
+                        )
+                        text_convo += f"[catalog showed: {names}]\n"
+                    elif resp.get("status") or resp.get("order_number"):
+                        bits = " ".join(
+                            str(resp[k]) for k in ("status", "order_number", "total_amount")
+                            if resp.get(k) is not None
+                        )
+                        text_convo += f"[tool {p.get('name')}: {bits}]\n"
 
         if not text_convo.strip():
             return

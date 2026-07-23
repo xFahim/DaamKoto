@@ -168,6 +168,17 @@ class MemoryService:
         """Return the internal dict-based conversation history."""
         return list(_cache.get(sender_id, []))
 
+    def visible_len(self, sender_id: str) -> int:
+        """Count history entries carrying visible text (user/bot messages).
+
+        Function-call/response plumbing entries are excluded — one agent run
+        adds 2-6 raw entries, so thresholds counted in raw entries fire far
+        too often (observed live: summarization after every single reply)."""
+        return sum(
+            1 for d in self.get_history(sender_id)
+            if any(p.get("type") == "text" and p.get("text") for p in d.get("parts", []))
+        )
+
     def seed_history(self, sender_id: str, history: list[dict]) -> None:
         """Initialize memory from a rehydrated DB transcript (no-op if already populated)."""
         if history and sender_id not in _cache:
