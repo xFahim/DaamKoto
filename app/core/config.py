@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # Agent models (override via OPENAI_MODEL / GEMINI_MODEL env vars).
     # Both verified available on the live keys 2026-07-15.
     openai_model: str = "gpt-5.4-mini"
-    gemini_model: str = "gemini-3.6-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
     # Debounce window (seconds) for combining rapid multi-message bursts into
     # one agent run. Resets on every new message from the sender. Each reset
     # picks a fresh random duration in [min, max] so the bot's response timing
