@@ -11,6 +11,35 @@ from app.core.config import settings
 # TTLCache automatically ejects idle users after exactly `conversation_ttl` seconds (e.g. 5 mins)
 _cache: TTLCache = TTLCache(maxsize=1000, ttl=settings.conversation_ttl)
 
+_STALE_IMAGE_PLACEHOLDER = (
+    "[customer sent a photo here — it was already analyzed earlier in this conversation]"
+)
+
+
+def _demote_stale_images(history: list[dict]) -> list[dict]:
+    """Replace image parts in older entries with a text placeholder.
+
+    Image parts (Gemini file URIs / OpenAI base64 data URIs) are re-billed by
+    the provider on EVERY model call they appear in — up to 5x per reply in the
+    ReAct loop. The last `image_stale_after` entries keep their images so
+    recent photos stay visible; older ones become cheap text. Read-time only —
+    the cached history is never mutated."""
+    keep = settings.image_stale_after
+    cutoff = max(0, len(history) - keep)
+    out = []
+    for i, msg in enumerate(history):
+        parts = msg.get("parts", [])
+        if i < cutoff and any(p.get("type") in ("file_data", "inline_data") for p in parts):
+            new_parts = [
+                {"type": "text", "text": _STALE_IMAGE_PLACEHOLDER}
+                if p.get("type") in ("file_data", "inline_data") else p
+                for p in parts
+            ]
+            out.append({**msg, "parts": new_parts})
+        else:
+            out.append(msg)
+    return out
+
 
 def _content_to_dict(content) -> dict:
     """Convert a Gemini types.Content object OR an already-normalised dict to our internal dict format."""
@@ -145,13 +174,13 @@ class MemoryService:
             _cache[sender_id] = list(history)
 
     def get_gemini_history(self, sender_id: str) -> list:
-        """Return history converted to Gemini types.Content objects."""
-        return [_dict_to_gemini(d) for d in self.get_history(sender_id)]
+        """Return history converted to Gemini types.Content objects (stale images demoted)."""
+        return [_dict_to_gemini(d) for d in _demote_stale_images(self.get_history(sender_id))]
 
     def get_openai_history(self, sender_id: str) -> list[dict]:
-        """Return history converted to OpenAI message format."""
+        """Return history converted to OpenAI message format (stale images demoted)."""
         messages = []
-        for d in self.get_history(sender_id):
+        for d in _demote_stale_images(self.get_history(sender_id)):
             converted = _dict_to_openai(d)
             if converted is None:
                 continue
@@ -168,8 +197,9 @@ class MemoryService:
         entry = _content_to_dict(content)
         history.append(entry)
 
-        # Increased max messages to prevent aggressive clipping during long order flows
-        max_messages = 30 
+        # Window cap — env-overridable (MEMORY_MAX_MESSAGES); summarization
+        # keeps long order flows coherent below this.
+        max_messages = settings.memory_max_messages
 
         if len(history) > max_messages:
             history = history[-max_messages:]

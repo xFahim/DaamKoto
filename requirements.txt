@@ -10,3 +10,4 @@ pydantic-settings
 requests
 cachetools
 openai
+pillow

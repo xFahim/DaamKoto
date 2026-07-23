@@ -252,7 +252,44 @@ class AgentService:
         mime_type = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
         if not mime_type.startswith("image/"):
             mime_type = "image/jpeg"
-        return image_bytes, mime_type
+        return cls._downscale_image(image_bytes, mime_type)
+
+    @staticmethod
+    def _downscale_image(image_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
+        """Downscale oversized photos so the longest side ≤ image_max_dimension.
+
+        Gemini bills images per 768×768 tile (~258 tokens each) — a full-res FB
+        photo can be ~6 tiles. Capping at one tile makes every image minimum
+        price (and shrinks the base64 payload on the OpenAI path) with no
+        practical loss for product identification. Falls back to the original
+        bytes on any decode failure (animated/unsupported formats)."""
+        try:
+            import io
+            from PIL import Image
+
+            img = Image.open(io.BytesIO(image_bytes))
+            max_dim = settings.image_max_dimension
+            if max(img.size) <= max_dim:
+                return image_bytes, mime_type
+
+            orig_size = img.size
+            img.thumbnail((max_dim, max_dim))
+            buf = io.BytesIO()
+            if img.mode in ("RGBA", "LA", "P"):
+                img.save(buf, format="PNG")  # keep transparency (stickers/screenshots)
+                out_mime = "image/png"
+            else:
+                img.convert("RGB").save(buf, format="JPEG", quality=85)
+                out_mime = "image/jpeg"
+            out = buf.getvalue()
+            logger.info(
+                f"📉 Image downscaled {orig_size[0]}x{orig_size[1]} → {img.size[0]}x{img.size[1]} "
+                f"({len(image_bytes)//1024}KB → {len(out)//1024}KB)"
+            )
+            return out, out_mime
+        except Exception as e:
+            logger.warning(f"Image downscale failed, using original: {e}")
+            return image_bytes, mime_type
 
     # ─────────────────────────────────────────────────────────────────────
     #  Tool execution bridge
@@ -732,7 +769,7 @@ class AgentService:
             f"\"{reply_preview}\""
         )
 
-        if len(memory_service.get_history(mem_key)) > 15 and mem_key not in self._summarizing:
+        if len(memory_service.get_history(mem_key)) > settings.summarize_threshold and mem_key not in self._summarizing:
             self._summarizing.add(mem_key)
             task = asyncio.create_task(self._summarize_history_task(mem_key, sender_id))
             task.add_done_callback(lambda t, k=mem_key: self._summarizing.discard(k))
@@ -742,13 +779,13 @@ class AgentService:
     async def _summarize_history_task(self, mem_key: str, sender_id: str):
         """Background task to summarize older history to save tokens."""
         history = memory_service.get_history(mem_key)
-        if len(history) <= 15:
+        if len(history) <= settings.summarize_threshold:
             return
 
         logger.info(f"[{sender_id}] Triggering background history summarization...")
 
-        # We'll take everything except the last 8 messages to summarize
-        keep_last_n = 8
+        # Summarize everything except the most recent messages (env SUMMARIZE_KEEP_LAST)
+        keep_last_n = settings.summarize_keep_last
         snapshot_len = len(history)
         to_summarize = history[:-keep_last_n]
 
