@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     # one agent run. Resets on every new message from the sender. Each reset
     # picks a fresh random duration in [min, max] so the bot's response timing
     # doesn't feel mechanical.
-    message_batch_timeout: float = 8       # min of the window; env MESSAGE_BATCH_TIMEOUT
-    message_batch_timeout_max: float = 12  # max of the window; env MESSAGE_BATCH_TIMEOUT_MAX
+    message_batch_timeout: float = 12      # min of the window; env MESSAGE_BATCH_TIMEOUT
+    message_batch_timeout_max: float = 16  # max of the window; env MESSAGE_BATCH_TIMEOUT_MAX
     conversation_ttl: int = 600
     conversation_max_turns: int = 5
     # Token-cost knobs (all env-overridable). History window: hard cap on

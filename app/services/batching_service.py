@@ -102,6 +102,12 @@ class MessageBatcher:
         # Serialize per conversation: replies go out in order, and memory
         # writes for one customer never interleave.
         lock = self._locks.setdefault(key, asyncio.Lock())
+        # Lock already held = a previous reply is still being generated/sent,
+        # so THIS batch was typed before the customer saw that reply. The agent
+        # gets told, so it won't answer the same question twice.
+        crossed = lock.locked()
+        if crossed:
+            logger.info(f"[{sender_id}] ⏳ Batch crossed an in-flight reply — flagging for the agent")
         async with lock:
             try:
                 await asyncio.wait_for(
@@ -109,7 +115,8 @@ class MessageBatcher:
                         sender_id=sender_id,
                         message_text=combined_text,
                         tenant=tenant,
-                        image_urls=batch["image_urls"]
+                        image_urls=batch["image_urls"],
+                        crossed=crossed,
                     ),
                     timeout=PROCESSING_TIMEOUT,
                 )

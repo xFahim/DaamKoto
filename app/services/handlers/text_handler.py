@@ -55,7 +55,8 @@ class TextHandler:
         sender_id: str,
         message_text: str,
         tenant: TenantContext,
-        image_urls: list[str] = None
+        image_urls: list[str] = None,
+        crossed: bool = False,
     ) -> None:
         """
         Pass the message to the central Agent Service, get the reply, and send it.
@@ -82,7 +83,9 @@ class TextHandler:
             await messaging_service.send_typing_on(sender_id, access_token=tenant.page_access_token)
 
             # Let the agent handle the entire multi-turn logic
-            reply = await agent_service.process(sender_id, message_text, image_urls=image_urls, tenant=tenant)
+            reply = await agent_service.process(
+                sender_id, message_text, image_urls=image_urls, tenant=tenant, crossed=crossed
+            )
 
             # Empty reply = internal error already logged upstream, OR a
             # deliberate silence decision ([SILENT] scope rule). Errors are

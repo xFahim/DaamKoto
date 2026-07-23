@@ -172,6 +172,17 @@ CORE_IDENTITY = (
     "## MERCHANT STYLE NOTES\n"
 )
 
+# Appended to the system instruction ONLY when the incoming batch was typed
+# while the previous reply was still being generated — the customer had not
+# seen that reply yet, so the model may be about to answer the same question
+# twice. ~50 tokens, one run only, never stored in history.
+CROSSED_REPLY_NOTE = (
+    "\n\n[TIMING NOTE: The customer sent this message BEFORE your previous reply was "
+    "delivered — they had not seen it yet. If your previous reply already answers this "
+    "message, do NOT repeat it: send a brief acknowledgement or only genuinely new "
+    "information. If it asks something new, answer normally.]"
+)
+
 # Order drafts awaiting explicit user confirmation.
 # Keyed by "{shop_id}:{sender_id}". 15-minute TTL: an unconfirmed draft dies quietly.
 _order_drafts: TTLCache = TTLCache(maxsize=2000, ttl=900)
@@ -672,7 +683,7 @@ class AgentService:
     #  Main entry point
     # ─────────────────────────────────────────────────────────────────────
 
-    async def process(self, sender_id: str, message_text: str = "", image_urls: list[str] = None, tenant: TenantContext = None) -> str:
+    async def process(self, sender_id: str, message_text: str = "", image_urls: list[str] = None, tenant: TenantContext = None, crossed: bool = False) -> str:
         """Process a message through the ReAct agent loop."""
         # Truncate message for log readability
         msg_preview = (message_text[:120] + "…") if len(message_text) > 120 else message_text
@@ -711,6 +722,7 @@ class AgentService:
             + (SPLIT_RULES if tenant.allow_split_replies else "")
             + greeting_hint
             + profile_context
+            + (CROSSED_REPLY_NOTE if crossed else "")
         )
 
         if self.provider == "openai":
